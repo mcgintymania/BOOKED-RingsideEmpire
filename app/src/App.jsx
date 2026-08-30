@@ -798,7 +798,18 @@ const HAPPINESS_FULFILLED_BONUS = 20;
 
 function attrOf(w) {
   const heldNow = (w.holdsTitles || []).length;
-  return avgStats(w) + Math.round(w.rankingPts / 4) + heldNow * 2 + Math.round(w.titleReigns * 0.5);
+  // A big enough ranking-points penalty (down to -50) can push this below
+  // zero — every other stat in the game is floored, this one wasn't, and an
+  // overall of 0 or less silently drops a wrestler out of the roster list's
+  // default "Min Overall Rating" filter as if they didn't exist.
+  return Math.max(1, avgStats(w) + Math.round(w.rankingPts / 4) + heldNow * 2 + Math.round(w.titleReigns * 0.5));
+}
+// Consistent, comparable option label for match-booking wrestler dropdowns —
+// name in caps (matching the display convention used everywhere else in the
+// game), plus alignment and overall so two options can be told apart at a
+// glance without opening each one up.
+function wrestlerOptionLabel(w) {
+  return `${w.name.toUpperCase()} — ${w.alignment} · OVR ${Math.round(attrOf(w))}`;
 }
 function teamAttr(team) {
   const members = team.filter(Boolean);
@@ -4264,14 +4275,14 @@ export default function BookedRingsideEmpire() {
                           <select value={slot.team1[0]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team1", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                             <option value="">Select performer...</option>
                             {bookable.map((w) => (
-                              <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[0]?.name !== w.name}>{w.name}</option>
+                              <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[0]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
                             ))}
                           </select>
                           {slot.team1[0] && <div className="text-[9px] text-[#8B8593] mt-1">ATTR {Math.round(attrOf(slot.team1[0]))} &middot; CHA {slot.team1[0].cha}/100 &middot; {effectiveTier(slot.team1[0])} &middot; <span className={slot.team1[0].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team1[0].alignment}</span> &middot; STA {slot.team1[0].eng}/100</div>}
                           <select value={slot.team2?.[0]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team2", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mt-1.5">
                             <option value="">No subject — general promo</option>
                             {bookable.filter((w) => w.name !== slot.team1[0]?.name).map((w) => (
-                              <option key={w.name} value={w.name}>{w.name}{w.rivals.includes(slot.team1[0]?.name) ? " (existing rival)" : ""}</option>
+                              <option key={w.name} value={w.name}>{wrestlerOptionLabel(w)}{w.rivals.includes(slot.team1[0]?.name) ? " (existing rival)" : ""}</option>
                             ))}
                           </select>
                           <div className="text-[9px] text-[#8B8593] italic mt-1">Promo segment — rated on charisma, no win/loss, boosts their CHA slightly. Aim it at a signed wrestler to nudge or spark a rivalry, without any energy cost.</div>
@@ -4284,7 +4295,7 @@ export default function BookedRingsideEmpire() {
                                 <select value={slot.team1[idx]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team1", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                                   <option value="">Select wrestler...</option>
                                   {bookable.map((w) => (
-                                    <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[idx]?.name !== w.name}>{w.name}</option>
+                                    <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[idx]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
                                   ))}
                                 </select>
                                 {slot.team1[idx] && <div className="text-[9px] text-[#8B8593] mt-0.5">ATTR {Math.round(attrOf(slot.team1[idx]))} &middot; {effectiveTier(slot.team1[idx])} &middot; <span className={slot.team1[idx].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team1[idx].alignment}</span> &middot; STA {slot.team1[idx].eng}/100</div>}
@@ -4324,7 +4335,7 @@ export default function BookedRingsideEmpire() {
                                   <select value={slot.team1[idx]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team1", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                                     <option value="">Select wrestler...</option>
                                     {options.map((w) => (
-                                      <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[idx]?.name !== w.name}>{w.name}</option>
+                                      <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[idx]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
                                     ))}
                                   </select>
                                   {slot.team1[idx] && <div className="text-[9px] text-[#8B8593] mt-0.5">ATTR {Math.round(attrOf(slot.team1[idx]))} &middot; {effectiveTier(slot.team1[idx])} &middot; <span className={slot.team1[idx].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team1[idx].alignment}</span> &middot; STA {slot.team1[idx].eng}/100</div>}
@@ -4342,7 +4353,7 @@ export default function BookedRingsideEmpire() {
                                   <select value={slot.team2[idx]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team2", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                                     <option value="">Select wrestler...</option>
                                     {options.map((w) => (
-                                      <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team2[idx]?.name !== w.name}>{w.name}</option>
+                                      <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team2[idx]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
                                     ))}
                                   </select>
                                   {slot.team2[idx] && <div className="text-[9px] text-[#8B8593] mt-0.5">ATTR {Math.round(attrOf(slot.team2[idx]))} &middot; {effectiveTier(slot.team2[idx])} &middot; <span className={slot.team2[idx].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team2[idx].alignment}</span> &middot; STA {slot.team2[idx].eng}/100</div>}
