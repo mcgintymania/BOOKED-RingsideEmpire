@@ -1754,6 +1754,7 @@ export default function BookedRingsideEmpire() {
     setRunning(true);
     setShowResult(null);
     setTimeout(() => {
+      try {
       const thisShowMatchupKeys = [];
       const matches = slots
         .map((slot) => {
@@ -2694,6 +2695,12 @@ export default function BookedRingsideEmpire() {
       setTotalShowsRun((n) => n + 1);
       setTotalMatchesRun((n) => n + matches.filter((m) => m.format === "match").length);
       setShowResult(record);
+      } catch (e) {
+        // A show that throws partway through should never leave the button
+        // stuck on "RUNNING THE SHOW..." forever — surface it in the console
+        // (so it's diagnosable) and always release the running state below.
+        console.error("runShow failed partway through:", e);
+      }
 
       setRunning(false);
     }, 1200);
@@ -2908,6 +2915,23 @@ export default function BookedRingsideEmpire() {
     if (tab === "saves") { refreshSaveSlots(); refreshPreviousGames(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // Continue a save automatically on load — a website reloads far more often
+  // than the artifact preview's single long-lived tab did, so requiring a
+  // manual Load Save every time would lose the "just pick up where you left
+  // off" continuity players expect from a real site. Falls back to the
+  // autosave if there's no manual save. Runs once, on mount, only.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get("booked-save", false);
+        if (res) { applySaveSnapshot(JSON.parse(res.value)); return; }
+        const auto = await window.storage.get("booked-autosave", false);
+        if (auto) applySaveSnapshot(JSON.parse(auto.value));
+      } catch (e) {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // weekCount only advances once a show has actually been run — skips the
