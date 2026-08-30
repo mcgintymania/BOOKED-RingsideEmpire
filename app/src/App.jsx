@@ -1432,6 +1432,7 @@ export default function BookedRingsideEmpire() {
   const [editingStableName, setEditingStableName] = useState("");
   const [showResult, setShowResult] = useState(null);
   const [running, setRunning] = useState(false);
+  const [runShowError, setRunShowError] = useState(null);
   const [weekCount, setWeekCount] = useState(1);
   const [totalShowsRun, setTotalShowsRun] = useState(0);
   const [totalMatchesRun, setTotalMatchesRun] = useState(0);
@@ -1753,6 +1754,7 @@ export default function BookedRingsideEmpire() {
   const runShow = () => {
     setRunning(true);
     setShowResult(null);
+    setRunShowError(null);
     setTimeout(() => {
       try {
       const thisShowMatchupKeys = [];
@@ -2299,22 +2301,6 @@ export default function BookedRingsideEmpire() {
         setUniverseFeed((feed) => [...rivalNewsEntries.map((e, i) => ({ id: `rv-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "rival", companyId: e.companyId })), ...feed].slice(0, 300));
       }
 
-      // Hall of Fame — best-ever seen from any rival company, tracked the same
-      // way as your own, so the page can show whether anyone's beaten you.
-      rivalReignCandidates.forEach((rc) => {
-        setHallOfFame((h) => (rc.weeks > (h.longestReignRival?.weeks ?? -1) ? { ...h, longestReignRival: rc } : h));
-      });
-      if (newRivalShowRecords.length > 0) {
-        const bestRivalMatch = newRivalShowRecords.flatMap((r) => r.matches.map((m) => ({ ...m, companyName: r.companyName, date: r.date }))).sort((a, b) => b.rating - a.rating)[0];
-        if (bestRivalMatch) {
-          setHallOfFame((h) => (bestRivalMatch.rating > (h.bestMatchRival?.rating ?? -1) ? { ...h, bestMatchRival: { rating: bestRivalMatch.rating, description: `${bestRivalMatch.a} vs ${bestRivalMatch.b}`, companyName: bestRivalMatch.companyName, date: bestRivalMatch.date.toISOString() } } : h));
-        }
-        const biggestRivalShow = [...newRivalShowRecords].sort((a, b) => b.attendance - a.attendance)[0];
-        if (biggestRivalShow) {
-          setHallOfFame((h) => (biggestRivalShow.attendance > (h.biggestShowRival?.attendance ?? -1) ? { ...h, biggestShowRival: { attendance: biggestRivalShow.attendance, companyName: biggestRivalShow.companyName, date: biggestRivalShow.date.toISOString() } } : h));
-        }
-      }
-
       // Clear deals once they lapse, and occasionally roll fresh offers when you're not under contract.
       if (networkDeal && weekNumber >= networkDeal.expiresWeek) setNetworkDeal(null);
       if (sponsorDeal && weekNumber >= sponsorDeal.expiresWeek) setSponsorDeal(null);
@@ -2383,6 +2369,22 @@ export default function BookedRingsideEmpire() {
       });
       if (newRivalShowRecords.length > 0) {
         setRivalShowHistory((h) => [...newRivalShowRecords, ...h].slice(0, 150));
+      }
+
+      // Hall of Fame — best-ever seen from any rival company, tracked the same
+      // way as your own, so the page can show whether anyone's beaten you.
+      rivalReignCandidates.forEach((rc) => {
+        setHallOfFame((h) => (rc.weeks > (h.longestReignRival?.weeks ?? -1) ? { ...h, longestReignRival: rc } : h));
+      });
+      if (newRivalShowRecords.length > 0) {
+        const bestRivalMatch = newRivalShowRecords.flatMap((r) => r.matches.map((m) => ({ ...m, companyName: r.companyName, date: r.date }))).sort((a, b) => b.rating - a.rating)[0];
+        if (bestRivalMatch) {
+          setHallOfFame((h) => (bestRivalMatch.rating > (h.bestMatchRival?.rating ?? -1) ? { ...h, bestMatchRival: { rating: bestRivalMatch.rating, description: `${bestRivalMatch.a} vs ${bestRivalMatch.b}`, companyName: bestRivalMatch.companyName, date: bestRivalMatch.date.toISOString() } } : h));
+        }
+        const biggestRivalShow = [...newRivalShowRecords].sort((a, b) => b.attendance - a.attendance)[0];
+        if (biggestRivalShow) {
+          setHallOfFame((h) => (biggestRivalShow.attendance > (h.biggestShowRival?.attendance ?? -1) ? { ...h, biggestShowRival: { attendance: biggestRivalShow.attendance, companyName: biggestRivalShow.companyName, date: biggestRivalShow.date.toISOString() } } : h));
+        }
       }
 
       let poolWithGrowth = null;
@@ -2697,9 +2699,11 @@ export default function BookedRingsideEmpire() {
       setShowResult(record);
       } catch (e) {
         // A show that throws partway through should never leave the button
-        // stuck on "RUNNING THE SHOW..." forever — surface it in the console
-        // (so it's diagnosable) and always release the running state below.
+        // stuck on "RUNNING THE SHOW..." forever — surface it (console +
+        // on-screen, since most players won't have dev tools open) and
+        // always release the running state below.
         console.error("runShow failed partway through:", e);
+        setRunShowError((e && e.message ? e.message : String(e)) + (e && e.stack ? `\n${e.stack}` : ""));
       }
 
       setRunning(false);
@@ -4414,6 +4418,13 @@ export default function BookedRingsideEmpire() {
               if (missing <= 0 || TIER_RANK[popularityTier(popularity)] < TIER_RANK.National) return null;
               return <div className="text-[10px] text-red-300 mb-2">Fans at your level expect a full card — {missing} empty slot{missing === 1 ? "" : "s"} will cost you rating and money.</div>;
             })()}
+            {runShowError && (
+              <div className="bg-[#2A1414] border border-red-500 rounded-lg p-3 text-xs mb-2">
+                <div className="font-bold text-red-400 mb-1">Something went wrong running that show.</div>
+                <div className="text-red-200 mb-1">Some of it may still have gone through (bank/news can update before an error), but results couldn't be finished. Please screenshot the message below and send it over so this can get fixed.</div>
+                <div className="booked-mono text-[10px] text-red-300 whitespace-pre-wrap break-words">{runShowError}</div>
+              </div>
+            )}
             <button onClick={runShow} disabled={!readyToRun || running} className="w-full py-3.5 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD] font-black tracking-widest text-sm rounded transition-colors" style={{ fontFamily: "Anton, sans-serif" }}>
               {running ? "RUNNING THE SHOW..." : "RUN THE SHOW"}
             </button>
