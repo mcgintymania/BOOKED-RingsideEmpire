@@ -2923,15 +2923,21 @@ export default function BookedRingsideEmpire() {
   // Continue a save automatically on load — a website reloads far more often
   // than the artifact preview's single long-lived tab did, so requiring a
   // manual Load Save every time would lose the "just pick up where you left
-  // off" continuity players expect from a real site. Falls back to the
-  // autosave if there's no manual save. Runs once, on mount, only.
+  // off" continuity players expect from a real site. Compares the manual
+  // save against the autosave and restores whichever is actually more
+  // recent — a manual save from early on shouldn't keep winning over shows
+  // played since then that only ever hit the autosave. Runs once, on mount.
   useEffect(() => {
     (async () => {
       try {
-        const res = await window.storage.get("booked-save", false);
-        if (res) { applySaveSnapshot(JSON.parse(res.value)); return; }
-        const auto = await window.storage.get("booked-autosave", false);
-        if (auto) applySaveSnapshot(JSON.parse(auto.value));
+        const [manualRes, autoRes] = await Promise.all([
+          window.storage.get("booked-save", false),
+          window.storage.get("booked-autosave", false),
+        ]);
+        const manual = manualRes ? JSON.parse(manualRes.value) : null;
+        const auto = autoRes ? JSON.parse(autoRes.value) : null;
+        const newest = !manual ? auto : !auto ? manual : (new Date(auto.savedAt) > new Date(manual.savedAt) ? auto : manual);
+        if (newest) applySaveSnapshot(newest);
       } catch (e) {}
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
