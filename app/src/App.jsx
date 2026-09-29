@@ -3424,6 +3424,93 @@ export default function BookedRingsideEmpire() {
                     </div>
                   </div>
                 </div>
+
+                <div className="dt:grid dt:grid-cols-2 dt:gap-4 space-y-5 dt:space-y-0">
+                  <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                    <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">UPCOMING</div>
+                    {(() => {
+                      const items = [];
+                      roster.forEach((w) => {
+                        if (w.contractExpiresWeek == null) return;
+                        const left = w.contractExpiresWeek - weekNumber;
+                        if (left >= 0 && left <= 4) items.push({ key: `c-${w.name}`, urgent: left <= 1, text: `${w.name}'s contract expires in ${left === 0 ? "this show" : `${left} week${left === 1 ? "" : "s"}`}` });
+                      });
+                      titles.forEach((t) => {
+                        if (t.holders.length === 0) return;
+                        const lastActive = t.lastDefendedWeek ?? t.reignStartWeek;
+                        if (lastActive === null) return;
+                        const left = TITLE_VACATE_WEEKS - (weekNumber - lastActive);
+                        if (left >= 0 && left <= 3) items.push({ key: `t-${t.id}`, urgent: left <= 1, text: `${t.name} vacates in ${left} week${left === 1 ? "" : "s"} without a defense` });
+                      });
+                      if (networkDeal) {
+                        const left = networkDeal.expiresWeek - weekNumber;
+                        if (left >= 0 && left <= 4) items.push({ key: "net", urgent: left <= 1, text: `TV deal with ${networkDeal.name} expires in ${left} week${left === 1 ? "" : "s"}` });
+                      }
+                      if (sponsorDeal) {
+                        const left = sponsorDeal.expiresWeek - weekNumber;
+                        if (left >= 0 && left <= 4) items.push({ key: "spo", urgent: left <= 1, text: `Sponsorship with ${sponsorDeal.name} expires in ${left} week${left === 1 ? "" : "s"}` });
+                      }
+                      if (loan) items.push({ key: "loan", urgent: loan.weeksRemaining <= 2, text: `Loan: £${loan.weeklyPayment.toLocaleString()}/wk, ${loan.weeksRemaining} week${loan.weeksRemaining === 1 ? "" : "s"} remaining` });
+                      if (items.length === 0) return <div className="text-xs text-[#8B8593] italic">Nothing needs attention this week.</div>;
+                      return (
+                        <div className="space-y-2">
+                          {items.map((it) => (
+                            <div key={it.key} className={`text-xs flex items-start gap-1.5 ${it.urgent ? "text-red-300" : "text-[#CFC9BB]"}`}>
+                              <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${it.urgent ? "bg-red-400" : "bg-[#8B6BC0]"}`} />
+                              {it.text}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                    <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">RECENT SHOWS</div>
+                    {showHistory.length === 0 ? (
+                      <div className="text-xs text-[#8B8593] italic">No shows run yet.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {showHistory.slice(0, 4).map((r) => (
+                          <div key={r.id} className="flex items-center justify-between text-xs">
+                            <div>
+                              <div className="font-semibold">{r.city} &middot; {r.arena}</div>
+                              <div className="text-[10px] text-[#8B8593]">Y{r.year} Wk{r.weekOfYear} &middot; {formatDate(r.date)}</div>
+                            </div>
+                            <div className="text-right">
+                              <div className="flex items-center gap-1 justify-end font-bold"><Trophy size={11} className="text-[#8B6BC0]" />{r.fullRating}</div>
+                              <div className={`text-[10px] ${r.profit >= 0 ? "text-[#8B6BC0]" : "text-red-400"}`}>{r.profit >= 0 ? "+" : ""}£{r.profit.toLocaleString()}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 dt:col-span-2">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">NEWS</div>
+                      <button onClick={() => setTab("news")} className="text-[10px] text-[#8B8593] hover:text-[#F2ECDD]">View all</button>
+                    </div>
+                    {universeFeed.length === 0 ? (
+                      <div className="text-xs text-[#8B8593] italic">Nothing to report yet — keep running shows and the story will start writing itself.</div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {universeFeed.slice(0, 5).map((item) => (
+                          <div key={item.id}>
+                            <div className="flex items-center gap-1.5 text-[9px] text-[#8B8593] mb-0.5">
+                              {item.type === "title" && <Award size={11} className="text-[#8B6BC0]" />}
+                              {item.type === "rival" && <Globe2 size={11} className="text-[#8B8593]" />}
+                              {item.type === "injury" && <Skull size={11} className="text-red-400" />}
+                              <span>Y{yearOf(item.showNumber)} Wk{weekOfYear(item.showNumber)} &middot; {formatDate(item.date)}</span>
+                            </div>
+                            <div className={`text-xs ${item.type === "title" ? "text-[#F2ECDD] font-semibold" : item.type === "injury" ? "text-red-300 font-semibold" : "text-[#CFC9BB]"}`}>{item.text}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
