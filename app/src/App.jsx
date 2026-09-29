@@ -1277,6 +1277,42 @@ const GUIDE_SECTIONS = [
   },
 ];
 
+// Desktop sidebar nav (>=900px, see tailwind's "dt" breakpoint). Same 15
+// destinations as the mobile bottom-tab bar + its Menu screen, just grouped
+// for a wider layout — no new screens, no tab key not already reachable.
+const SIDEBAR_SECTIONS = [
+  {
+    title: "General",
+    items: [
+      { key: "company", label: "Office", icon: Landmark },
+      { key: "news", label: "News", icon: Newspaper },
+      { key: "guide", label: "Guide", icon: BookOpen },
+    ],
+  },
+  {
+    title: "World",
+    items: [
+      { key: "promotions", label: "Promotions", icon: Globe2 },
+      { key: "rankings", label: "Rankings", icon: TrendingUp },
+      { key: "wrestlers", label: "Wrestlers", icon: UserPlus },
+    ],
+  },
+  {
+    title: "Your Promotion",
+    items: [
+      { key: "roster", label: "Roster", icon: Users },
+      { key: "book", label: "Book", icon: Ticket },
+      { key: "titles", label: "Titles", icon: Award },
+      { key: "deals", label: "Deals", icon: Tv },
+      { key: "merch", label: "Merchandise", icon: Ticket },
+      { key: "achievements", label: "Achievements", icon: Trophy },
+      { key: "halloffame", label: "Hall of Fame", icon: Star },
+      { key: "backoffice", label: "Back Office", icon: Landmark },
+      { key: "saves", label: "Saves", icon: NotebookPen },
+    ],
+  },
+];
+
 export default function BookedRingsideEmpire() {
   const [bank, setBank] = useState(20000);
   const [networkDeal, setNetworkDeal] = useState(null);
@@ -3121,7 +3157,7 @@ export default function BookedRingsideEmpire() {
 
   return (
     <div
-      className="min-h-full w-full text-[#F2ECDD] p-3 sm:p-6"
+      className="min-h-full w-full text-[#F2ECDD] p-3 sm:p-6 dt:pl-[264px]"
       style={{
         color: "#F2ECDD",
         background: `
@@ -3135,6 +3171,35 @@ export default function BookedRingsideEmpire() {
       }}
     >
       <style>{FONT_IMPORT}</style>
+
+      <aside className="hidden dt:flex dt:flex-col fixed left-0 top-0 bottom-0 w-[240px] p-4 overflow-y-auto z-30" style={{ backgroundColor: "#0A0A0C", borderRight: "1px solid #2B2733" }}>
+        <div className="mb-6">
+          <div className="text-xl tracking-tight leading-none" style={{ fontFamily: "Anton, sans-serif" }}>BOOKED<span className="text-[#8B6BC0]">!</span></div>
+          <div className="text-[8px] tracking-[0.3em] text-[#8B8593] font-semibold">RINGSIDE EMPIRE</div>
+        </div>
+        {SIDEBAR_SECTIONS.map((section) => (
+          <div key={section.title} className="mb-5">
+            <div className="text-[9px] tracking-widest text-[#8B8593] font-bold mb-1.5 px-2">{section.title.toUpperCase()}</div>
+            <div className="space-y-0.5">
+              {section.items.map((item) => {
+                const active = tab === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    onClick={() => setTab(item.key)}
+                    className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded text-xs font-semibold transition-colors"
+                    style={{ color: active ? "#F2ECDD" : "#8B8593", backgroundColor: active ? "#241B33" : "transparent" }}
+                  >
+                    <item.icon size={15} className={active ? "text-[#8B6BC0]" : ""} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </aside>
+
       <WrestlerDetailModal wrestler={detailWrestler} pool={pool} titles={titles} weekNumber={weekNumber} perUseRoster={perUseRoster} companyName={companyName} onRename={renameWrestler} onSetAlignment={setAlignment} onSetPush={setPush} onClose={() => setDetailWrestler(null)} />
 
       {gameOver && (
@@ -5140,7 +5205,7 @@ export default function BookedRingsideEmpire() {
       </div>
       <div className="booked-bottom-nav-spacer" />
 
-      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, backgroundColor: "#0A0A0C", borderTop: "1px solid #2B2733", zIndex: 40 }}>
+      <div className="dt:hidden" style={{ position: "fixed", bottom: 0, left: 0, right: 0, backgroundColor: "#0A0A0C", borderTop: "1px solid #2B2733", zIndex: 40 }}>
         <div className="max-w-4xl mx-auto flex items-stretch">
           {[
             { key: "company", label: "Company", icon: Landmark },
