@@ -3743,7 +3743,7 @@ export default function BookedRingsideEmpire() {
         </div>
       )}
 
-      <div className="max-w-4xl mx-auto mb-4 sm:mb-6 flex items-center justify-between flex-wrap gap-2">
+      <div className="max-w-4xl dt:max-w-6xl mx-auto mb-4 sm:mb-6 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <div>
             <div className="text-2xl sm:text-3xl tracking-tight leading-none" style={{ fontFamily: "Anton, sans-serif" }}>
@@ -3792,7 +3792,7 @@ export default function BookedRingsideEmpire() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto pt-5">
+      <div className="max-w-4xl dt:max-w-6xl mx-auto pt-5">
         {tab === "guide" && (
           <div className="space-y-4">
             <div className="bg-[#17151C] border border-[#5B3B8C] rounded-lg p-4">
@@ -4173,7 +4173,7 @@ export default function BookedRingsideEmpire() {
                 {roster.length > 0 && <div className="text-[10px] text-[#8B8593]">Avg. Overall: <span className="text-[#F2ECDD] font-bold">{avgRosterOverall}</span> <span className="opacity-70">(expect ~{EXPECTED_ROSTER_OVERALL[popularityTier(popularity)]}+ at {popularityTier(popularity)})</span>{roster.length < 5 && <span className="opacity-70"> — doesn't affect growth until 5 signed ({roster.length}/5)</span>}</div>}
               </div>
               <div className="text-[10px] text-[#8B8593] mb-3">Billed a standing weekly wage, available every show, guaranteed — no per-appearance fee.</div>
-              <div className="grid sm:grid-cols-2 gap-2">
+              <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
                 {roster.map((w) => (
                   <div key={w.name} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3">
                     <div className="flex items-center justify-between mb-1">
@@ -4210,7 +4210,7 @@ export default function BookedRingsideEmpire() {
             <div>
               <div className="text-[11px] tracking-widest text-[#8B8593] font-bold mb-1">PER-USE ({perUseWrestlers.length})</div>
               <div className="text-[10px] text-[#8B8593] mb-3">Your regular freelance picks — stay bookable every week, but cost a fee whenever you actually use them.</div>
-              <div className="grid sm:grid-cols-2 gap-2">
+              <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
                 {perUseWrestlers.map((w) => (
                   <div key={w.name} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
                     <div className="flex items-center justify-between mb-1">
@@ -4534,7 +4534,7 @@ export default function BookedRingsideEmpire() {
               </div>
             )}
 
-            <div className="grid sm:grid-cols-2 gap-2">
+            <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
               {[...pool].filter(passesFilters).sort((a, b) => {
                 const valOf = (w) => (sortField === "overall" ? attrOf(w) : sortField === "ranking" ? w.rankingPts : w[sortField]);
                 return valOf(b) - valOf(a);
@@ -4606,7 +4606,7 @@ export default function BookedRingsideEmpire() {
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">PROMOTIONS LEADERBOARD</div>
             <div className="text-[10px] text-[#8B8593] mb-3">Fictional rival companies, ranked by popularity. Tap one for more detail.</div>
-            <div className="space-y-2">
+            <div className="space-y-2 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-2">
               {[{ id: "player", name: companyName, popularity, isPlayer: true, bookerName: playerName || "You", funds: bank, showsRun: totalShowsRun }, ...rivalCompanies]
                 .sort((a, b) => b.popularity - a.popularity)
                 .map((co, i) => {
@@ -4653,7 +4653,7 @@ export default function BookedRingsideEmpire() {
                   <div className="text-[10px] text-[#8B8593]">{popularityTier(co.popularity)} &middot; Score {Math.round(co.popularity)}</div>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+              <div className="grid grid-cols-2 dt:grid-cols-4 gap-2 mb-3 text-xs">
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">BOOKER</div><div className="font-bold">{co.bookerName}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">FUNDS</div><div className="font-bold booked-mono" style={{ color: "var(--gold)" }}>£{Math.round(co.funds).toLocaleString()}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">SHOWS RUN</div><div className="font-bold">{co.showsRun}</div></div>
@@ -4672,7 +4672,7 @@ export default function BookedRingsideEmpire() {
                 </>
               )}
               <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">SIGNED ROSTER ({signedRoster.length})</div>
-              <div className="space-y-1">
+              <div className="space-y-1 dt:space-y-0 dt:grid dt:grid-cols-3 dt:gap-1.5">
                 {signedRoster.map((w) => (
                   <div key={w.name} className="flex items-center justify-between text-xs bg-[#131117] rounded px-2 py-1.5">
                     <span>{w.name}</span>
@@ -4686,7 +4686,7 @@ export default function BookedRingsideEmpire() {
         })()}
 
         {tab === "deals" && (
-          <div className="space-y-6">
+          <div className="space-y-6 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-6 dt:items-start">
             <div>
               <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">TV NETWORK</div>
               <div className="text-[10px] text-[#8B8593] mb-3">Pays per estimated viewer, based on your popularity, for the length of the deal.</div>
@@ -5425,7 +5425,7 @@ export default function BookedRingsideEmpire() {
             <div className="text-[10px] text-[#8B8593] mb-3">{rankingsMode === "singles" ? "Ranked across the wrestlers currently in that scope." : "Ranked by combined ranking points of each tag team's core pairing."}</div>
 
             {rankingsMode === "singles" ? (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-2">
                 {[...pool]
                   .filter((w) => {
                     if (rankingsFilter === "all") return true;
@@ -5451,7 +5451,7 @@ export default function BookedRingsideEmpire() {
                   ))}
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-2">
                 {stables
                   .map((s) => {
                     const core = s.members.slice(0, 2);
@@ -5528,6 +5528,7 @@ export default function BookedRingsideEmpire() {
               </div>
             )}
 
+            <div className="space-y-3 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-3 dt:items-start">
             {titles.map((t) => {
               const reignWeeks = t.holders.length > 0 ? weekNumber - t.reignStartWeek : null;
               return (
@@ -5596,6 +5597,7 @@ export default function BookedRingsideEmpire() {
                 </div>
               );
             })}
+            </div>
           </div>
         )}
 
@@ -5708,7 +5710,7 @@ export default function BookedRingsideEmpire() {
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">HALL OF FAME</div>
             <div className="text-[10px] text-[#8B8593] mb-4">Your best ever, against the best any rival's ever done — lifetime, across every promotion you've ever run. Only a full progress wipe clears these.</div>
-            <div className="space-y-3">
+            <div className="space-y-3 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-3 dt:items-start">
               <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2"><Star size={16} className="text-[#8B6BC0]" /><span className="font-bold text-sm">Best Match Ever</span></div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
@@ -5789,7 +5791,7 @@ export default function BookedRingsideEmpire() {
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">ACHIEVEMENTS</div>
             <div className="text-[10px] text-[#8B8593] mb-4">Lifetime — these carry over even if you retire and start a new promotion. {unlockedAchievements.length}/{ACHIEVEMENTS.length} unlocked.</div>
-            <div className="space-y-2">
+            <div className="space-y-2 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-2">
               {ACHIEVEMENTS.map((a) => {
                 const unlocked = unlockedAchievements.find((u) => u.id === a.id);
                 return (
