@@ -1485,6 +1485,10 @@ export default function BookedRingsideEmpire() {
   const [arenaIdx, setArenaIdx] = useState(0);
   const arena = ARENAS[arenaIdx];
   const [ticketPrice, setTicketPrice] = useState(arena.ticketMin);
+  // Show level — which half of a split roster this week's card can draw from.
+  // A Developmental show is capped to the smaller venues regardless of company
+  // tier, since it's a lower-profile card by design, not a full flagship show.
+  const [showLevel, setShowLevel] = useState("main");
   const [merchStock, setMerchStock] = useState(0);
   const [merchQualityTier, setMerchQualityTier] = useState(0);
   const [merchBuyQty, setMerchBuyQty] = useState(100);
@@ -1569,7 +1573,9 @@ export default function BookedRingsideEmpire() {
       : clamp(0.7 + 0.3 * (avgRosterOverall / EXPECTED_ROSTER_OVERALL[popularityTier(popularity)]), 0.6, 1.15);
   const unlockedCities = computeUnlockedCities(cityPopularity, startingCity);
   const perUseWrestlers = pool.filter((w) => w.contractedTo === null && perUseRoster.includes(w.name));
-  const bookable = [...roster, ...perUseWrestlers].filter((w) => !w.injuryWeeksRemaining);
+  // Freelancers are open to either level — only the exclusive roster is split.
+  const levelRoster = roster.filter((w) => (w.rosterLevel || "main") === showLevel);
+  const bookable = [...levelRoster, ...perUseWrestlers].filter((w) => !w.injuryWeeksRemaining);
 
   const renameWrestler = (oldName, newName) => {
     setPool((p) => p.map((w) => (w.name === oldName ? { ...w, name: newName } : w)));
@@ -1620,6 +1626,9 @@ export default function BookedRingsideEmpire() {
     if (cost > 0) setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - cost }]);
     setPool((p) => p.map((x) => (x.name === w.name ? { ...x, contractedTo: null, contractExpiresWeek: null } : x)));
   };
+  // Show-level roster split — which card a signed wrestler is eligible for.
+  // Defaults to "main" for anyone without one set (older saves included).
+  const setRosterLevel = (name, level) => setPool((p) => p.map((w) => (w.name === name ? { ...w, rosterLevel: level } : w)));
 
   const startNegotiating = (w) => {
     setNegotiatingTarget(w);
@@ -1987,7 +1996,10 @@ export default function BookedRingsideEmpire() {
   const setSegmentMinutes = (id, minutes) => updateSegment(id, (s) => ({ ...s, minutes: clamp(minutes, SEGMENT_MIN_MINUTES, SEGMENT_MAX_MINUTES) }));
 
   const usedNames = new Set(segments.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).map((w) => w.name));
-  const arenaLocked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[arena.minTier];
+  // A Developmental show never gets the bigger rooms, however big the company —
+  // it's a lower-profile card by design, not a cost-saving version of the same show.
+  const DEVELOPMENTAL_MAX_ARENA_IDX = 1;
+  const arenaLocked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[arena.minTier] || (showLevel === "developmental" && arenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX);
   const totalShowMinutes = segments.reduce((sum, s) => sum + s.minutes, 0);
   const readyToRun = !gameOver && !arenaLocked && segments.some((s) => isSegmentComplete(s)) && !!city;
 
@@ -2085,7 +2097,7 @@ export default function BookedRingsideEmpire() {
       const usedShowMinutes = showRan ? segments.filter((s) => s.result).reduce((sum, s) => sum + s.minutes, 0) : 0;
       const shortfallFrac = showRan ? Math.max(0, (arena.showMinutes - usedShowMinutes) / arena.showMinutes) : 0;
       let underbookedPenaltyNote = null;
-      if (showRan && shortfallFrac > 0 && TIER_RANK[popularityTier(popularity)] >= TIER_RANK.National) {
+      if (showRan && showLevel === "main" && shortfallFrac > 0 && TIER_RANK[popularityTier(popularity)] >= TIER_RANK.National) {
         const ratingHit = Math.round(shortfallFrac * 40);
         const cashHit = Math.round(shortfallFrac * 3750);
         fullRating = Math.max(0, fullRating - ratingHit);
@@ -2876,7 +2888,7 @@ export default function BookedRingsideEmpire() {
         setUniverseFeed((feed) => [...retiringWrestlers.map((r, i) => ({ id: `ret-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${r.name} has announced their retirement from professional wrestling.${r.holdsTitles.length > 0 ? " Their title(s) have been vacated." : ""}`, type: "rumor", companyId: r.contractedTo })), ...feed].slice(0, 300));
       }
 
-      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city } : null;
+      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
       if (record) setShowHistory((h) => [record, ...h].slice(0, 60));
       if (thisShowMatchupKeys.length > 0) {
         setRecentMatchups((prev) => [...thisShowMatchupKeys, ...prev].slice(0, 30));
@@ -4117,6 +4129,18 @@ export default function BookedRingsideEmpire() {
                       {w.injuryWeeksRemaining && <span className="text-red-400"> &middot; {w.injuryType ? `${w.injuryType.toUpperCase()} ` : ""}INJURED ({w.injuryWeeksRemaining}wk)</span>}
                     </div>
                     <div className="text-[10px] text-[#8B8593]">£{weeklyWage(w).toLocaleString()}/wk &middot; {w.contractExpiresWeek - weekNumber}wk left</div>
+                    <div className="flex items-center gap-1 mt-2">
+                      {["main", "developmental"].map((lvl) => (
+                        <button
+                          key={lvl}
+                          onClick={() => setRosterLevel(w.name, lvl)}
+                          className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(w.rosterLevel || "main") === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}
+                          style={(w.rosterLevel || "main") === lvl ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}
+                        >
+                          {lvl === "main" ? "Main Roster" : "Developmental"}
+                        </button>
+                      ))}
+                    </div>
                     <button onClick={() => startExtending(w)} className="mt-2 text-[10px] font-bold text-[#8B6BC0] hover:text-[#F2ECDD]">Extend contract</button>
                   </div>
                 ))}
@@ -4622,10 +4646,30 @@ export default function BookedRingsideEmpire() {
             <div className="flex flex-col dt:flex-row gap-5">
             <div className="flex-1 min-w-0 space-y-5">
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+              <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Ticket size={14} /> SHOW LEVEL</div>
+              <div className="flex gap-2 mb-2">
+                {["main", "developmental"].map((lvl) => (
+                  <button
+                    key={lvl}
+                    onClick={() => { setShowLevel(lvl); if (lvl === "developmental" && arenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX) { setArenaIdx(0); setTicketPrice(ARENAS[0].ticketMin); } }}
+                    className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${showLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"}`}
+                    style={showLevel === lvl ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}
+                  >
+                    {lvl === "main" ? "MAIN ROSTER SHOW" : "DEVELOPMENTAL SHOW"}
+                  </button>
+                ))}
+              </div>
+              <div className="text-[9px] text-[#8B8593]">
+                {showLevel === "main"
+                  ? `Draws from your Main Roster (${roster.filter((w) => (w.rosterLevel || "main") === "main").length}) plus per-use talent.`
+                  : `Draws from your Developmental roster (${roster.filter((w) => w.rosterLevel === "developmental").length}) plus per-use talent — capped to Backyard/Small venues regardless of company tier.`}
+              </div>
+            </div>
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
               <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Building2 size={14} /> VENUE</div>
               <div className="flex flex-wrap gap-2 mb-4">
                 {ARENAS.map((ar, i) => {
-                  const locked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[ar.minTier];
+                  const locked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[ar.minTier] || (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX);
                   return (
                     <button
                       key={ar.name}
@@ -4636,7 +4680,7 @@ export default function BookedRingsideEmpire() {
                       }`}
                       style={!locked && i === arenaIdx ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C", color: "#F2ECDD" } : undefined}
                     >
-                      {ar.name.toUpperCase()}{locked ? ` (${ar.minTier}+)` : ""}
+                      {ar.name.toUpperCase()}{locked ? (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX ? " (Main Roster only)" : ` (${ar.minTier}+)`) : ""}
                     </button>
                   );
                 })}
@@ -5021,7 +5065,7 @@ export default function BookedRingsideEmpire() {
             </div>
 
             {(() => {
-              if (totalShowMinutes >= arena.showMinutes || TIER_RANK[popularityTier(popularity)] < TIER_RANK.National) return null;
+              if (showLevel !== "main" || totalShowMinutes >= arena.showMinutes || TIER_RANK[popularityTier(popularity)] < TIER_RANK.National) return null;
               return <div className="text-[10px] text-red-300 mb-2">Fans at your level expect a full card — only using {totalShowMinutes} of {arena.showMinutes} min will cost you rating and money.</div>;
             })()}
             {runShowError && (
@@ -5039,7 +5083,7 @@ export default function BookedRingsideEmpire() {
 
         {bookSubTab === "book" && showResult && (
           <div className="space-y-4">
-            <div className="text-center"><div className="text-[10px] tracking-[0.3em] text-[#8B6BC0] font-bold">{showResult.city.toUpperCase()} &middot; {showResult.arena.toUpperCase()} SHOW &middot; RESULTS</div></div>
+            <div className="text-center"><div className="text-[10px] tracking-[0.3em] text-[#8B6BC0] font-bold">{showResult.city.toUpperCase()} &middot; {showResult.arena.toUpperCase()} SHOW{showResult.showLevel === "developmental" ? " · DEVELOPMENTAL" : ""} &middot; RESULTS</div></div>
             <div className="space-y-2">
               {showResult.matches.map((m, i) => (
                 <div key={i} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3">
