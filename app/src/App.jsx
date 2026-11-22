@@ -4686,7 +4686,8 @@ export default function BookedRingsideEmpire() {
         })()}
 
         {tab === "deals" && (
-          <div className="space-y-6 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-6 dt:items-start">
+          <div className="flex flex-col dt:flex-row gap-5">
+          <div className="flex-1 min-w-0 space-y-6 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-6 dt:items-start">
             <div>
               <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">TV NETWORK</div>
               <div className="text-[10px] text-[#8B8593] mb-3">Pays per estimated viewer, based on your popularity, for the length of the deal.</div>
@@ -4745,6 +4746,40 @@ export default function BookedRingsideEmpire() {
                 <div className="text-xs text-[#8B8593] italic">No offers on the table right now — keep running good shows and sponsors will come calling.</div>
               )}
             </div>
+          </div>
+
+          <div className="hidden dt:block dt:w-64 shrink-0">
+            <div className="sticky top-4 space-y-4">
+              <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">TV NETWORKS BY TIER</div>
+                <div className="space-y-1">
+                  {NETWORKS.map((n) => {
+                    const unlocked = popularity >= n.minPopularity;
+                    return (
+                      <div key={n.id} className={`flex justify-between text-[10px] ${unlocked ? "text-[#CFC9BB]" : "text-[#5A5660]"}`}>
+                        <span>{n.name}</span>
+                        <span>{unlocked ? "✓" : `${n.minPopularity}+`}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">SPONSORS BY TIER</div>
+                <div className="space-y-1">
+                  {SPONSORS.map((s) => {
+                    const unlocked = popularity >= s.minPopularity;
+                    return (
+                      <div key={s.id} className={`flex justify-between text-[10px] ${unlocked ? "text-[#CFC9BB]" : "text-[#5A5660]"}`}>
+                        <span>{s.name}</span>
+                        <span>{unlocked ? "✓" : `${s.minPopularity}+`}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
           </div>
         )}
 
@@ -5404,7 +5439,8 @@ export default function BookedRingsideEmpire() {
         )}
 
         {tab === "rankings" && (
-          <div>
+          <div className="flex flex-col dt:flex-row gap-5">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
               <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">TOP 10 BY RANKING POINTS</div>
               <div className="flex items-center gap-1.5">
@@ -5481,10 +5517,38 @@ export default function BookedRingsideEmpire() {
               </div>
             )}
           </div>
+
+          <div className="hidden dt:block dt:w-64 shrink-0">
+            <div className="sticky top-4 space-y-4">
+              <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">YOUR STANDING</div>
+                {(() => {
+                  const yourNames = new Set([...roster, ...perUseWrestlers].map((w) => w.name));
+                  const fullRanked = [...pool].sort((a, b) => b.rankingPts - a.rankingPts);
+                  const bestIdx = fullRanked.findIndex((w) => yourNames.has(w.name));
+                  if (bestIdx === -1) return <div className="text-xs text-[#8B8593] italic">No signed or per-use wrestlers yet.</div>;
+                  const best = fullRanked[bestIdx];
+                  return (
+                    <div className="text-xs">
+                      <div className="font-bold">{best.name}</div>
+                      <div className="text-[#8B8593]">Ranked #{bestIdx + 1} overall &middot; {best.rankingPts} pts</div>
+                      {bestIdx >= 10 && <div className="text-[9px] text-[#8B8593] italic mt-1">Not in the top 10 shown — needs more ranking points.</div>}
+                    </div>
+                  );
+                })()}
+              </div>
+              <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">ACTIVE STORYLINES</div>
+                {renderStorylinesMini(3)}
+              </div>
+            </div>
+          </div>
+          </div>
         )}
 
         {tab === "titles" && (
-          <div className="space-y-3">
+          <div className="flex flex-col dt:flex-row gap-5">
+          <div className="flex-1 min-w-0 space-y-3">
             {!purchasingTitle ? (
               titles.length >= MAX_TITLES ? (
                 <div className="w-full text-center py-2.5 text-xs text-[#8B8593] italic border border-[#2B2733] rounded-lg">Maximum of {MAX_TITLES} titles reached</div>
@@ -5598,6 +5662,41 @@ export default function BookedRingsideEmpire() {
               );
             })}
             </div>
+          </div>
+
+          <div className="hidden dt:block dt:w-64 shrink-0">
+            <div className="sticky top-4 space-y-4">
+              <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">TITLE STATUS</div>
+                <div className="space-y-1.5 text-[11px] mb-3">
+                  <div className="flex justify-between"><span className="text-[#8B8593]">Titles</span><span className="font-bold">{titles.length}/{MAX_TITLES}</span></div>
+                  <div className="flex justify-between"><span className="text-[#8B8593]">Vacant</span><span className="font-bold">{titles.filter((t) => t.holders.length === 0).length}</span></div>
+                  <div className="flex justify-between"><span className="text-[#8B8593]">Avg. prestige</span><span className="font-bold">{titles.length ? Math.round(titles.reduce((s, t) => s + (t.prestige || 0), 0) / titles.length) : 0}/100</span></div>
+                </div>
+                {(() => {
+                  const atRisk = titles.filter((t) => {
+                    if (t.holders.length === 0) return false;
+                    const lastActive = t.lastDefendedWeek ?? t.reignStartWeek;
+                    const weeksLeft = lastActive !== null ? TITLE_VACATE_WEEKS - (weekNumber - lastActive) : TITLE_VACATE_WEEKS;
+                    return weeksLeft <= 3;
+                  });
+                  if (atRisk.length === 0) return <div className="text-[10px] text-[#8B8593] italic">No titles at risk of vacating right now.</div>;
+                  return (
+                    <div>
+                      <div className="text-[9px] tracking-widest text-red-400 font-bold mb-1.5">AT RISK OF VACATING</div>
+                      <div className="space-y-1">
+                        {atRisk.map((t) => {
+                          const lastActive = t.lastDefendedWeek ?? t.reignStartWeek;
+                          const weeksLeft = Math.max(0, TITLE_VACATE_WEEKS - (weekNumber - lastActive));
+                          return <div key={t.id} className="text-[10px] text-red-300">{t.name} &mdash; {weeksLeft}wk left</div>;
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
           </div>
         )}
 
