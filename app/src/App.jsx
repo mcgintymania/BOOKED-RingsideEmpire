@@ -1973,6 +1973,23 @@ export default function BookedRingsideEmpire() {
   const totalShowMinutes = segments.reduce((sum, s) => sum + s.minutes, 0);
   const readyToRun = !gameOver && !arenaLocked && segments.some((s) => isSegmentComplete(s)) && !!city;
 
+  // Projected Show Costs panel — same cost components runShow() actually
+  // charges (booking fee, specialty upcharges, freelance fees), computed
+  // ahead of time from what's currently booked so the booker can see the
+  // bill before hitting Run the Show. Weekly roster payroll is shown too,
+  // for context, but it's charged regardless of this specific show.
+  const projectedSpecialtyCost = segments.reduce((sum, s) => {
+    if (!s.specialtyId) return sum;
+    const specialty = SPECIALTY_MATCHES.find((sp) => sp.id === s.specialtyId);
+    return sum + (specialty ? specialty.cost : 0);
+  }, 0);
+  const projectedFreelancerNames = new Set(
+    segments.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).filter((w) => w.contractedTo === null).map((w) => w.name)
+  );
+  const projectedFreelanceCost = bookable.filter((w) => projectedFreelancerNames.has(w.name)).reduce((sum, w) => sum + (w.perUseFee ?? baseFreelanceFee(w)), 0);
+  const projectedPayroll = roster.reduce((sum, w) => sum + weeklyWage(w), 0);
+  const projectedShowCost = arena.cost + projectedSpecialtyCost + projectedFreelanceCost;
+
   const cityPop = city ? cityPopularity[city] : popularity;
   // Price always thins the crowd (multiplicative, so it matters at any popularity level),
   // and city score raises the ceiling — a high enough score projects close to a sellout
@@ -3145,6 +3162,60 @@ export default function BookedRingsideEmpire() {
   const yearsAvailable = [...new Set(financeHistory.map((f) => f.year))];
   const financeChartData = financeHistory.filter((f) => f.year === financeYear);
 
+  // Shared top-N active-storylines list — used by the Office dashboard widget
+  // and the booking screen's side panel so a booker can see what's hot without
+  // leaving the Book tab.
+  const renderStorylinesMini = (limit) => {
+    const yourNames = new Set([...roster, ...perUseWrestlers].map((w) => w.name));
+    const seen = new Set();
+    const list = [];
+    pool.forEach((w) => {
+      if (!yourNames.has(w.name)) return;
+      w.rivals.forEach((otherName) => {
+        const other = pool.find((x) => x.name === otherName);
+        if (!other || !other.rivals.includes(w.name)) return;
+        const key = [w.name, otherName].sort().join("|");
+        if (seen.has(key)) return;
+        seen.add(key);
+        const story = storylines[key] || { intensity: 20 };
+        list.push({ key, a: w.name, b: otherName, intensity: story.intensity });
+      });
+    });
+    const seenStable = new Set();
+    stables.forEach((s) => {
+      (s.rivalStableIds || []).forEach((otherId) => {
+        const other = stables.find((x) => x.id === otherId);
+        if (!other || !(other.rivalStableIds || []).includes(s.id)) return;
+        const key = [s.id, otherId].sort().join("|");
+        if (seenStable.has(key)) return;
+        seenStable.add(key);
+        const story = stableStorylines[key] || { intensity: 20 };
+        list.push({ key, a: s.name, b: other.name, intensity: story.intensity });
+      });
+    });
+    list.sort((x, y) => y.intensity - x.intensity);
+    if (list.length === 0) return <div className="text-xs text-[#8B8593] italic">None involving your roster yet.</div>;
+    return (
+      <div className="space-y-2">
+        {list.slice(0, limit).map((r) => {
+          const stage = feudStage(r.intensity);
+          const readyToBlow = stage.label === "Ready to Blow Off";
+          return (
+            <div key={r.key} className="text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold flex items-center gap-1">{readyToBlow && <Flame size={11} style={{ color: "var(--gold)" }} />} {r.a} <span className="text-[#8B6BC0]">vs</span> {r.b}</span>
+                <span className="text-[10px] font-bold" style={{ color: readyToBlow ? "var(--gold)" : "#8B8593" }}>{stage.label}</span>
+              </div>
+              <div className="h-1 bg-[#232029] rounded-full overflow-hidden mt-1">
+                <div className="h-full bg-gradient-to-r from-[#5B3B8C] to-red-500" style={{ width: `${r.intensity}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   // Shared between Roster > Rivalries (full management: create/remove) and the
   // standalone Storylines screen (overview only) — same data, same cards,
   // just whether the create-rivalry controls show. Mirrors the existing
@@ -3715,56 +3786,7 @@ export default function BookedRingsideEmpire() {
                       <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">ACTIVE STORYLINES</div>
                       <button onClick={() => setTab("storylines")} className="text-[10px] text-[#8B8593] hover:text-[#F2ECDD]">View all</button>
                     </div>
-                    {(() => {
-                      const yourNames = new Set([...roster, ...perUseWrestlers].map((w) => w.name));
-                      const seen = new Set();
-                      const list = [];
-                      pool.forEach((w) => {
-                        if (!yourNames.has(w.name)) return;
-                        w.rivals.forEach((otherName) => {
-                          const other = pool.find((x) => x.name === otherName);
-                          if (!other || !other.rivals.includes(w.name)) return;
-                          const key = [w.name, otherName].sort().join("|");
-                          if (seen.has(key)) return;
-                          seen.add(key);
-                          const story = storylines[key] || { intensity: 20 };
-                          list.push({ key, a: w.name, b: otherName, intensity: story.intensity });
-                        });
-                      });
-                      const seenStable = new Set();
-                      stables.forEach((s) => {
-                        (s.rivalStableIds || []).forEach((otherId) => {
-                          const other = stables.find((x) => x.id === otherId);
-                          if (!other || !(other.rivalStableIds || []).includes(s.id)) return;
-                          const key = [s.id, otherId].sort().join("|");
-                          if (seenStable.has(key)) return;
-                          seenStable.add(key);
-                          const story = stableStorylines[key] || { intensity: 20 };
-                          list.push({ key, a: s.name, b: other.name, intensity: story.intensity });
-                        });
-                      });
-                      list.sort((x, y) => y.intensity - x.intensity);
-                      if (list.length === 0) return <div className="text-xs text-[#8B8593] italic">None involving your roster yet.</div>;
-                      return (
-                        <div className="space-y-2">
-                          {list.slice(0, 3).map((r) => {
-                            const stage = feudStage(r.intensity);
-                            const readyToBlow = stage.label === "Ready to Blow Off";
-                            return (
-                              <div key={r.key} className="text-xs">
-                                <div className="flex items-center justify-between">
-                                  <span className="font-semibold flex items-center gap-1">{readyToBlow && <Flame size={11} style={{ color: "var(--gold)" }} />} {r.a} <span className="text-[#8B6BC0]">vs</span> {r.b}</span>
-                                  <span className="text-[10px] font-bold" style={{ color: readyToBlow ? "var(--gold)" : "#8B8593" }}>{stage.label}</span>
-                                </div>
-                                <div className="h-1 bg-[#232029] rounded-full overflow-hidden mt-1">
-                                  <div className="h-full bg-gradient-to-r from-[#5B3B8C] to-red-500" style={{ width: `${r.intensity}%` }} />
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
+                    {renderStorylinesMini(3)}
                   </div>
 
                   <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 dt:col-span-2">
@@ -4433,6 +4455,8 @@ export default function BookedRingsideEmpire() {
               <div className="text-[10px] text-[#8B8593]">{formatDate(scheduledDate)}</div>
               {isPPVWeek && <div className="text-[10px] text-[#8B6BC0] font-bold tracking-wide mt-0.5">BIG SHOW WEEK &mdash; consider booking the Major Arena for a bigger payoff</div>}
             </div>
+            <div className="flex flex-col dt:flex-row gap-5">
+            <div className="flex-1 min-w-0 space-y-5">
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
               <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Building2 size={14} /> VENUE</div>
               <div className="flex flex-wrap gap-2 mb-4">
@@ -4579,7 +4603,10 @@ export default function BookedRingsideEmpire() {
                   return (
                     <div key={slot.id} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3 space-y-2">
                       <div className="flex items-center justify-between flex-wrap gap-1">
-                        <span className="text-[10px] text-[#8B8593] font-bold tracking-wide">{label.toUpperCase()} <span className="text-[#8B6BC0]">(cap {cap})</span></span>
+                        <span className="text-[10px] text-[#8B8593] font-bold tracking-wide">
+                          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-[#5B3B8C] text-[#F2ECDD] text-[9px] font-black mr-1.5 align-middle">{segIndex + 1}</span>
+                          {slot.format === "segment" ? "ANGLE" : "MATCH"} &middot; {label.toUpperCase()} <span className="text-[#8B6BC0]">(cap {cap})</span>
+                        </span>
                         <div className="flex items-center gap-1">
                           <button onClick={() => setSegmentMinutes(slot.id, slot.minutes - 1)} className="w-5 h-5 flex items-center justify-center rounded border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]">−</button>
                           <span className="text-[9px] text-[#8B8593] w-12 text-center">{slot.minutes} min</span>
@@ -4793,6 +4820,40 @@ export default function BookedRingsideEmpire() {
                   <Plus size={13} /> Add Angle
                 </button>
               </div>
+            </div>
+            </div>
+
+            <div className="hidden dt:block dt:w-64 shrink-0">
+              <div className="sticky top-4 space-y-4">
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                  <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">SHOW TIME</div>
+                  <div className="flex justify-between text-[10px] text-[#8B8593] mb-1">
+                    <span>Booked</span>
+                    <span className={totalShowMinutes > arena.showMinutes ? "text-red-400 font-bold" : "text-[#F2ECDD] font-bold"}>{totalShowMinutes} / {arena.showMinutes} min</span>
+                  </div>
+                  <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
+                    <div className="h-full" style={{ width: `${Math.min(100, (totalShowMinutes / arena.showMinutes) * 100)}%`, backgroundColor: totalShowMinutes > arena.showMinutes ? "#EF4444" : "#8B6BC0" }} />
+                  </div>
+                  <div className="text-[9px] text-[#8B8593] mt-2">{segments.length} segment{segments.length === 1 ? "" : "s"} booked at {arena.name}</div>
+                </div>
+
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                  <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">SHOW COSTS</div>
+                  <div className="space-y-1.5 text-[11px]">
+                    <div className="flex justify-between"><span className="text-[#8B8593]">Venue booking</span><span className="font-bold">£{arena.cost.toLocaleString()}</span></div>
+                    {projectedSpecialtyCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Specialty matches</span><span className="font-bold">£{projectedSpecialtyCost.toLocaleString()}</span></div>}
+                    {projectedFreelanceCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Freelancer fees</span><span className="font-bold">£{projectedFreelanceCost.toLocaleString()}</span></div>}
+                    <div className="flex justify-between pt-1.5 border-t border-[#2B2733]"><span className="text-[#8B6BC0] font-bold">Show total</span><span className="font-bold text-[#8B6BC0]">£{projectedShowCost.toLocaleString()}</span></div>
+                    <div className="flex justify-between text-[#5A5660]"><span>Roster payroll (weekly)</span><span>£{projectedPayroll.toLocaleString()}</span></div>
+                  </div>
+                </div>
+
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                  <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">ACTIVE STORYLINES</div>
+                  {renderStorylinesMini(3)}
+                </div>
+              </div>
+            </div>
             </div>
 
             {(() => {
