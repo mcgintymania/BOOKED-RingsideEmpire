@@ -1063,6 +1063,19 @@ function popularityTier(p) {
   return "Unknown";
 }
 const TIER_RANK = { Unknown: 0, Local: 1, Regional: 2, National: 3, International: 4 };
+// Rival promotions don't have a visible Staff roster of their own — modeling
+// one per company would be a lot of invisible bookkeeping for something the
+// player never directly touches. Instead, their backstage quality (agents,
+// trainers, production) scales with their own popularity, same shape as the
+// player's staffRatingBonus — the biggest promotions just have better people
+// around, which already reads clearly in their match ratings.
+function rivalStaffBonus(popularity) {
+  return Math.round((clamp(popularity, 0, 100) / 100) * 10);
+}
+const RIVAL_PRODUCTION_LABELS = { Unknown: "Minimal", Local: "Basic", Regional: "Solid", National: "Polished", International: "Elite" };
+function rivalProductionLabel(popularity) {
+  return RIVAL_PRODUCTION_LABELS[popularityTier(popularity)];
+}
 // Founding a developmental feeder promotion is a real investment, not a free
 // toggle — building out a training facility and a second roster costs more
 // the bigger you already are.
@@ -3086,7 +3099,7 @@ export default function BookedRingsideEmpire() {
             const rivalAvgAttr = (attrOf(a) + attrOf(b)) / 2;
             const rivalFloor = Math.round(rivalAvgAttr * 0.25);
             const rivalSpread = Math.round(20 + rivalAvgAttr * 0.55);
-            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread)));
+            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread) + rivalStaffBonus(co.popularity)));
             showMatches.push({ a: a.name, b: b.name, winner: aWins ? a.name : b.name, rating: rivalRating });
           }
           if (showMatches.length > 0) {
@@ -5525,11 +5538,12 @@ export default function BookedRingsideEmpire() {
                   <div className="text-[10px] text-[#8B8593]">{popularityTier(co.popularity)} &middot; Score {Math.round(co.popularity)}</div>
                 </div>
               </div>
-              <div className="grid grid-cols-2 dt:grid-cols-4 gap-2 mb-3 text-xs">
+              <div className="grid grid-cols-2 dt:grid-cols-5 gap-2 mb-3 text-xs">
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">BOOKER</div><div className="font-bold">{co.bookerName}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">FUNDS</div><div className="font-bold booked-mono" style={{ color: "var(--gold)" }}>£{Math.round(co.funds).toLocaleString()}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">SHOWS RUN</div><div className="font-bold">{co.showsRun}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">CHAMPION</div><div className="font-bold">{champ?.holder || "Vacant"}</div></div>
+                <div className="bg-[#131117] rounded-lg p-2.5" title="Backstage staff quality — agents, trainers, production — scales with how big the promotion already is, same idea as your own Staff screen."><div className="text-[9px] text-[#8B8593]">PRODUCTION</div><div className="font-bold">{rivalProductionLabel(co.popularity)}</div></div>
               </div>
 
               {co.acquired ? (
