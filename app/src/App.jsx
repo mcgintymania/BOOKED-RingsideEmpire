@@ -4,7 +4,7 @@ import {
   Wallet, Users, Ticket, Building2, Star, X, Plus, Trophy, UserPlus, Award, BarChart3, Newspaper,
   Calendar, ChevronDown, ListChecks, Landmark, Pencil, Globe2, Check, Sparkles, BatteryCharging,
   ArrowUpCircle, Swords, Layers, LineChart as LineChartIcon, NotebookPen, Lock, Tv, Flame, Skull, Users2, BookOpen, Menu, Flag,
-  Wrench, Upload, Download, Trash2
+  Wrench, Upload, Download, Trash2, HardHat
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -290,6 +290,30 @@ const BOOKER_FIRST = ["Morgan", "Casey", "Reese", "Jordan", "Avery", "Devon", "Q
 const BOOKER_LAST = ["Whitfield", "Doyle", "Blackburn", "Sharpe", "Callahan", "Mercer", "Ashby", "Konig"];
 function randomBookerName() {
   return `${BOOKER_FIRST[rand(0, BOOKER_FIRST.length - 1)]} ${BOOKER_LAST[rand(0, BOOKER_LAST.length - 1)]}`;
+}
+
+// Staff — a simpler hiring pool than wrestlers: no rival bidding, just a
+// standing roster of candidates per role you can hire or release directly.
+// Each role's skill feeds a specific gameplay effect (see where staffRatingBonus,
+// medicalFactor, and ringCrewFactor are computed and used).
+const STAFF_ROLES = [
+  { key: "agent", label: "Agent", desc: "Works matches with your talent on structure and psychology — the better the agent, the higher your matches can realistically grade." },
+  { key: "referee", label: "Referee", desc: "Keeps matches under control in the ring — a sharp referee protects a match's floor and keeps a bad night from becoming a disaster." },
+  { key: "medical", label: "Medical Staff", desc: "Reduces how often wrestlers get hurt on your shows, and shortens recovery time when they do." },
+  { key: "ringcrew", label: "Ring Crew", desc: "Handles setup, safety, and show presentation — a sharp crew cuts down on costly on-site mishaps." },
+  { key: "booker", label: "Assistant Booker", desc: "A second set of eyes across the whole card — a strong assistant nudges every show's overall rating up a little." },
+];
+function staffWeeklyWage(skill) {
+  if (skill <= 20) return 200;
+  if (skill <= 35) return 400;
+  if (skill <= 50) return 800;
+  if (skill <= 65) return 1500;
+  if (skill <= 80) return 2500;
+  return 4000;
+}
+function generateStaffCandidate(role) {
+  const skill = rand(20, 85);
+  return { id: `staff-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: randomBookerName(), role, skill, contractedTo: null, contractExpiresWeek: null };
 }
 
 // World Editor — lightweight CSV in/out, no external library. Handles quoted
@@ -1411,6 +1435,7 @@ const SIDEBAR_SECTIONS = [
     title: "Your Promotion",
     items: [
       { key: "roster", label: "Roster", icon: Users },
+      { key: "staff", label: "Staff", icon: HardHat },
       { key: "storylines", label: "Storylines", icon: Flame },
       { key: "book", label: "Book", icon: Ticket },
       { key: "calendar", label: "Calendar", icon: Calendar },
@@ -1483,6 +1508,10 @@ export default function BookedRingsideEmpire() {
   const [workingAgreements, setWorkingAgreements] = useState([]); // rival company ids
   const [feederCompany, setFeederCompany] = useState(null); // { name, foundedWeek }
   const [newFeederName, setNewFeederName] = useState("");
+  const [staffPool, setStaffPool] = useState(() => STAFF_ROLES.flatMap((r) => Array.from({ length: 4 }, () => generateStaffCandidate(r.key))));
+  const [staffSubTab, setStaffSubTab] = useState("agent");
+  const [hiringStaffTarget, setHiringStaffTarget] = useState(null);
+  const [staffHireWeeks, setStaffHireWeeks] = useState(26);
   const [playerLastTier, setPlayerLastTier] = useState("Unknown");
   const [rivalTitles, setRivalTitles] = useState(() => RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: _initialChampions[c.id] || null, reignStartWeek: _initialChampions[c.id] ? 1 : null })));
   const [nextReserveIndex, setNextReserveIndex] = useState(0);
@@ -2131,6 +2160,36 @@ export default function BookedRingsideEmpire() {
     setEditingTitleId(null);
   };
 
+  // Staff — hiring/releasing, and the derived skill values every gameplay
+  // effect reads from. Only your best-skilled hire in each role counts (no
+  // stacking multiple agents for a bigger bonus), same spirit as how only
+  // one network/sponsor deal can be active at a time.
+  const hiredStaff = staffPool.filter((s) => s.contractedTo === "player");
+  const bestStaffSkill = (role) => hiredStaff.filter((s) => s.role === role).reduce((max, s) => Math.max(max, s.skill), 0);
+  const bestAgentSkill = bestStaffSkill("agent");
+  const bestRefereeSkill = bestStaffSkill("referee");
+  const bestMedicalSkill = bestStaffSkill("medical");
+  const bestRingCrewSkill = bestStaffSkill("ringcrew");
+  const bestBookerSkill = bestStaffSkill("booker");
+  // Agents and a sharp referee raise the ceiling a match can realistically hit;
+  // an assistant booker's contribution is smaller and show-wide rather than
+  // per-match. Caps at +12 total with max skill across all three roles.
+  const staffRatingBonus = Math.round((bestAgentSkill / 100) * 6 + (bestRefereeSkill / 100) * 3 + (bestBookerSkill / 100) * 3);
+  const medicalInjuryFactor = 1 - (bestMedicalSkill / 100) * 0.5;
+  const ringCrewCatastropheFactor = 1 - (bestRingCrewSkill / 100) * 0.5;
+  const staffWeeklyPayroll = hiredStaff.reduce((sum, s) => sum + staffWeeklyWage(s.skill), 0);
+  const startHiringStaff = (s) => { setHiringStaffTarget(s); setStaffHireWeeks(26); };
+  const confirmHireStaff = () => {
+    if (!hiringStaffTarget) return;
+    setStaffPool((sp) => sp.map((s) => (s.id === hiringStaffTarget.id ? { ...s, contractedTo: "player", contractExpiresWeek: weekNumber + staffHireWeeks } : s)));
+    setUniverseFeed((feed) => [{ id: `staffhire-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has hired ${hiringStaffTarget.name} as ${STAFF_ROLES.find((r) => r.key === hiringStaffTarget.role)?.label || "staff"}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
+    setHiringStaffTarget(null);
+  };
+  const releaseStaff = (s) => {
+    setStaffPool((sp) => sp.map((x) => (x.id === s.id ? { ...x, contractedTo: null, contractExpiresWeek: null } : x)));
+    setUniverseFeed((feed) => [{ id: `staffrel-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has released ${s.name}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
+  };
+
   // Ported straight from the old fixed-slot resolution logic (same formulas,
   // same order of operations) — the only thing that changed is where `cap`
   // comes from: a computed position+minutes value instead of a SLOT_DEFS
@@ -2146,7 +2205,8 @@ export default function BookedRingsideEmpire() {
       const performer = seg.team1[0];
       const subject = seg.team2 && seg.team2[0] ? seg.team2[0] : null;
       const chaFloor = Math.round(performer.cha * 0.4);
-      const rating = Math.max(chaFloor, Math.min(cap, chaFloor + Math.round(Math.random() * (cap - chaFloor))));
+      const rawRating = Math.max(chaFloor, Math.min(cap, chaFloor + Math.round(Math.random() * (cap - chaFloor))));
+      const rating = Math.min(cap, rawRating + staffRatingBonus);
       return { slotKey: seg.id, slotLabel: label, format: "segment", performer, subject, rating, titleInfo: null };
     }
     if (seg.type === "triple" || seg.type === "fatal4") {
@@ -2167,6 +2227,7 @@ export default function BookedRingsideEmpire() {
       let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread) + 3)); // scrambles run a touch hotter
       const specialty = seg.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === seg.specialtyId) : null;
       if (specialty) rating = Math.min(cap, rating + specialty.ratingBonus);
+      rating = Math.min(cap, rating + staffRatingBonus);
       let titleInfo = null;
       if (seg.titleId) {
         const title = titles.find((t) => t.id === seg.titleId);
@@ -2254,6 +2315,7 @@ export default function BookedRingsideEmpire() {
         titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
       }
     }
+    rating = Math.min(cap, rating + staffRatingBonus);
     return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod: pickWinMethod(winnerTeam) };
   };
 
@@ -2392,7 +2454,7 @@ export default function BookedRingsideEmpire() {
       const sponsorIncome = sponsorActive ? sponsorDeal.weeklyPay : 0;
 
       const loanPayment = loan ? loan.weeklyPayment : 0;
-      let profit = revenue - (showRan ? arena.cost : 0) - wrestlerPay - specialtyCost - loanPayment + news.amount + networkIncome + sponsorIncome;
+      let profit = revenue - (showRan ? arena.cost : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll + news.amount + networkIncome + sponsorIncome;
       const matchLikeRatings = matches.map((m) => m.rating);
       let fullRating = matchLikeRatings.length ? Math.round(matchLikeRatings.reduce((s, r) => s + r, 0) / matchLikeRatings.length) : 0;
 
@@ -2431,7 +2493,7 @@ export default function BookedRingsideEmpire() {
       profit += merchRevenue;
 
       let catastropheEntry = null;
-      if (Math.random() < CATASTROPHE_CHANCE && bank > 0) {
+      if (Math.random() < CATASTROPHE_CHANCE * ringCrewCatastropheFactor && bank > 0) {
         const severity = CATASTROPHE_SEVERITIES[rand(0, CATASTROPHE_SEVERITIES.length - 1)];
         const hit = Math.round(bank * severity);
         const reason = CATASTROPHE_REASONS[rand(0, CATASTROPHE_REASONS.length - 1)].replace("{company}", companyName);
@@ -3091,7 +3153,7 @@ export default function BookedRingsideEmpire() {
           } else if (inMatch) {
             const delta = inMatch.specialty ? rand(ENERGY_LOSS_SPECIALTY[0], ENERGY_LOSS_SPECIALTY[1]) : rand(ENERGY_LOSS_MATCH[0], ENERGY_LOSS_MATCH[1]);
             eng = clamp(eng - delta, 0, 100);
-            if (eng < INJURY_ENERGY_THRESHOLD && Math.random() < INJURY_CHANCE) {
+            if (eng < INJURY_ENERGY_THRESHOLD && Math.random() < INJURY_CHANCE * medicalInjuryFactor) {
               const injuryPick = pickInjuryType();
               injuryWeeksRemaining = Math.max(1, Math.round(rand(INJURY_WEEKS_MIN, INJURY_WEEKS_MAX) * injuryPick.weeksMult));
               injuryType = injuryPick.name;
@@ -3261,6 +3323,18 @@ export default function BookedRingsideEmpire() {
       } else {
         setUniverseFeed((feed) => [{ id: `skip-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} ran no show this week — the business ticked along quietly.`, type: "rumor", companyId: "player" }, ...feed].slice(0, 300));
       }
+      // Staff candidate pool trickles over — a stale unhired candidate is
+      // occasionally swapped for a freshly generated one of the same role,
+      // so the pool never fully dries up or goes stale long-term.
+      if (Math.random() < 0.15) {
+        setStaffPool((sp) => {
+          const idx = sp.findIndex((s) => s.contractedTo !== "player");
+          if (idx === -1) return sp;
+          const replaced = [...sp];
+          replaced[idx] = generateStaffCandidate(sp[idx].role);
+          return replaced;
+        });
+      }
       setWeekCount((w) => w + 1);
       setShowResult(record);
       } catch (e) {
@@ -3315,6 +3389,7 @@ export default function BookedRingsideEmpire() {
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
     scheduledEvents, eventTemplates, workingAgreements, feederCompany,
+    staffPool,
   });
 
   const applySaveSnapshot = (s) => {
@@ -3354,6 +3429,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates(s.eventTemplates || []);
     setWorkingAgreements(s.workingAgreements || []);
     setFeederCompany(s.feederCompany || null);
+    setStaffPool(s.staffPool || STAFF_ROLES.flatMap((r) => Array.from({ length: 4 }, () => generateStaffCandidate(r.key))));
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setShowResult(null); setGameOver(false); setTab("company");
@@ -3598,6 +3674,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates([]);
     setWorkingAgreements([]);
     setFeederCompany(null);
+    setStaffPool(STAFF_ROLES.flatMap((r) => Array.from({ length: 4 }, () => generateStaffCandidate(r.key))));
     setSegments([]);
     setNotes("");
     setTab("company");
@@ -5040,6 +5117,82 @@ export default function BookedRingsideEmpire() {
           </div>
         )}
 
+        {tab === "staff" && (
+          <div>
+            <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">STAFF</div>
+            <div className="text-[10px] text-[#8B8593] mb-3">Behind-the-scenes hires with no rival bidding — pick straight from the candidate pool. Your best hire per role is the one that counts.</div>
+
+            <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-3 mb-4 grid grid-cols-2 gap-2 text-[10px]">
+              <div className="flex justify-between"><span className="text-[#8B8593]">Match rating bonus</span><span className="font-bold text-[#8B6BC0]">+{staffRatingBonus}</span></div>
+              <div className="flex justify-between"><span className="text-[#8B8593]">Injury chance</span><span className="font-bold text-[#8B6BC0]">&minus;{Math.round((1 - medicalInjuryFactor) * 100)}%</span></div>
+              <div className="flex justify-between"><span className="text-[#8B8593]">Catastrophe chance</span><span className="font-bold text-[#8B6BC0]">&minus;{Math.round((1 - ringCrewCatastropheFactor) * 100)}%</span></div>
+              <div className="flex justify-between"><span className="text-[#8B8593]">Staff payroll (weekly)</span><span className="font-bold">£{staffWeeklyPayroll.toLocaleString()}</span></div>
+            </div>
+
+            <div className="flex gap-2 mb-4 flex-wrap">
+              {STAFF_ROLES.map((r) => (
+                <SubTabButton key={r.key} active={staffSubTab === r.key} onClick={() => setStaffSubTab(r.key)} icon={HardHat} label={r.label} />
+              ))}
+            </div>
+
+            {STAFF_ROLES.filter((r) => r.key === staffSubTab).map((role) => (
+              <div key={role.key}>
+                <div className="text-[10px] text-[#8B8593] mb-3">{role.desc}</div>
+
+                <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">HIRED</div>
+                <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2 mb-4">
+                  {hiredStaff.filter((s) => s.role === role.key).map((s) => (
+                    <div key={s.id} className="bg-[#241B33] border border-[#5B3B8C] rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-bold text-sm">{s.name}</div>
+                        <button onClick={() => releaseStaff(s)} className="text-[9px] font-bold px-2 py-1 rounded border border-[#2B2733] text-[#8B8593] hover:text-red-400 hover:border-red-400">Release</button>
+                      </div>
+                      <div className="text-[10px] text-[#8B8593] mt-1">Skill {s.skill} &middot; £{staffWeeklyWage(s.skill).toLocaleString()}/wk &middot; under contract {Math.max(0, (s.contractExpiresWeek ?? weekNumber) - weekNumber)}wk</div>
+                    </div>
+                  ))}
+                  {hiredStaff.filter((s) => s.role === role.key).length === 0 && (
+                    <div className="text-xs text-[#8B8593] italic col-span-2">No one hired for this role yet.</div>
+                  )}
+                </div>
+
+                <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">CANDIDATES</div>
+                <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
+                  {staffPool.filter((s) => s.role === role.key && s.contractedTo !== "player").map((s) => (
+                    <div key={s.id} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-bold text-sm">{s.name}</div>
+                        <button onClick={() => startHiringStaff(s)} className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-[#5B3B8C] hover:bg-[#6C47A3]"><Plus size={11} /> Hire</button>
+                      </div>
+                      <div className="text-[10px] text-[#8B8593] mt-1">Skill {s.skill} &middot; £{staffWeeklyWage(s.skill).toLocaleString()}/wk</div>
+                    </div>
+                  ))}
+                  {staffPool.filter((s) => s.role === role.key && s.contractedTo !== "player").length === 0 && (
+                    <div className="text-xs text-[#8B8593] italic col-span-2">No candidates available right now — check back after a few weeks.</div>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {hiringStaffTarget && (
+              <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setHiringStaffTarget(null)}>
+                <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
+                  <div className="text-lg font-black mb-1" style={{ fontFamily: "Anton, sans-serif" }}>HIRE {hiringStaffTarget.name.toUpperCase()}</div>
+                  <div className="text-[10px] text-[#8B8593] mb-3">£{staffWeeklyWage(hiringStaffTarget.skill).toLocaleString()}/week, billed automatically while under contract.</div>
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    {CONTRACT_OPTIONS.map((wk) => (
+                      <button key={wk} onClick={() => setStaffHireWeeks(wk)} className={`px-3 py-2 rounded text-xs font-bold border ${staffHireWeeks === wk ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={staffHireWeeks === wk ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
+                        {wk} weeks
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={confirmHireStaff} className="w-full py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded">Offer contract</button>
+                  <button onClick={() => setHiringStaffTarget(null)} className="w-full mt-2 px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Close</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {tab === "promotions" && !viewingCompany && (
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">PROMOTIONS LEADERBOARD</div>
@@ -5746,6 +5899,7 @@ export default function BookedRingsideEmpire() {
                     {projectedFreelanceCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Freelancer fees</span><span className="font-bold">£{projectedFreelanceCost.toLocaleString()}</span></div>}
                     <div className="flex justify-between pt-1.5 border-t border-[#2B2733]"><span className="text-[#8B6BC0] font-bold">Show total</span><span className="font-bold text-[#8B6BC0]">£{projectedShowCost.toLocaleString()}</span></div>
                     <div className="flex justify-between text-[#5A5660]"><span>Roster payroll (weekly)</span><span>£{projectedPayroll.toLocaleString()}</span></div>
+                    {staffWeeklyPayroll > 0 && <div className="flex justify-between text-[#5A5660]"><span>Staff payroll (weekly)</span><span>£{staffWeeklyPayroll.toLocaleString()}</span></div>}
                   </div>
                 </div>
 
@@ -6630,6 +6784,7 @@ export default function BookedRingsideEmpire() {
                 { key: "storylines", label: "Storylines", desc: `${Object.keys(storylines).length + Object.keys(stableStorylines).length} active`, icon: Flame },
                 { key: "calendar", label: "Calendar", desc: `${scheduledEvents.length} event${scheduledEvents.length === 1 ? "" : "s"} scheduled`, icon: Calendar },
                 { key: "wrestlers", label: "Wrestlers", desc: "Browse & hire the full pool", icon: UserPlus },
+                { key: "staff", label: "Staff", desc: `${hiredStaff.length} hired`, icon: HardHat },
                 { key: "promotions", label: "Promotions", desc: "Rival companies", icon: Globe2 },
                 { key: "deals", label: "Deals", desc: "TV networks & sponsors", icon: Tv },
                 { key: "merch", label: "Merchandise", desc: popularity >= MERCH_UNLOCK_POPULARITY ? `${merchStock} units in stock` : "Locked", icon: Ticket },
