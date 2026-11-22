@@ -227,7 +227,7 @@ function makeSegment(format) {
 // Longer contracts cost proportionally more, but now that a signed wrestler costs
 // nothing extra per show, the multiplier is steeper than before — you're buying
 // unlimited use, not just a booking.
-const CONTRACT_OPTIONS = [26, 52, 78, 104];
+const CONTRACT_OPTIONS = [13, 26, 52, 78, 104, 156];
 const STABLE_MIN_MEMBERS = 2;
 const STABLE_MAX_MEMBERS = 5;
 // Weekly wage tiers, keyed by overall rating (ATTR is 0-100 now). Signing costs
@@ -1354,6 +1354,7 @@ const SIDEBAR_SECTIONS = [
       { key: "roster", label: "Roster", icon: Users },
       { key: "storylines", label: "Storylines", icon: Flame },
       { key: "book", label: "Book", icon: Ticket },
+      { key: "calendar", label: "Calendar", icon: Calendar },
       { key: "titles", label: "Titles", icon: Award },
       { key: "deals", label: "Deals", icon: Tv },
       { key: "merch", label: "Merchandise", icon: Ticket },
@@ -1515,6 +1516,12 @@ export default function BookedRingsideEmpire() {
 
   const [showHistory, setShowHistory] = useState([]);
   const [rivalShowHistory, setRivalShowHistory] = useState([]);
+  // Calendar — player-scheduled reminders, fired by week number. One-off events
+  // remove themselves once fired; recurring ones reschedule intervalWeeks ahead.
+  const [scheduledEvents, setScheduledEvents] = useState([]); // { id, label, weekNumber, recurring, intervalWeeks }
+  const [newEventLabel, setNewEventLabel] = useState("");
+  const [newEventWeeksOut, setNewEventWeeksOut] = useState(4);
+  const [newEventRecurring, setNewEventRecurring] = useState(false);
   const [financeHistory, setFinanceHistory] = useState([{ weekNumber: 0, year: 1, weekOfYear: 0, bank: 20000 }]);
   const [universeFeed, setUniverseFeed] = useState([]);
   const [storylines, setStorylines] = useState({}); // "nameA|nameB" (sorted) -> { intensity, matchesFought }
@@ -1540,6 +1547,17 @@ export default function BookedRingsideEmpire() {
   const scheduledDate = addWeeks(START_DATE, weekCount - 1);
   const isPPVWeek = weekNumber % PPV_EVERY === 0;
   const currentYear = yearOf(weekNumber);
+
+  const addScheduledEvent = () => {
+    if (!newEventLabel.trim()) return;
+    setScheduledEvents((ev) => [...ev, {
+      id: `evt-${Date.now()}`, label: newEventLabel.trim(),
+      weekNumber: weekNumber + Math.max(1, newEventWeeksOut),
+      recurring: newEventRecurring, intervalWeeks: newEventRecurring ? Math.max(1, newEventWeeksOut) : null,
+    }]);
+    setNewEventLabel(""); setNewEventWeeksOut(4); setNewEventRecurring(false);
+  };
+  const removeScheduledEvent = (id) => setScheduledEvents((ev) => ev.filter((e) => e.id !== id));
 
   const roster = pool.filter((w) => w.contractedTo === "player");
   const avgRosterOverall = roster.length > 0 ? Math.round(roster.reduce((s, w) => s + attrOf(w), 0) / roster.length) : 0;
@@ -2005,23 +2023,32 @@ export default function BookedRingsideEmpire() {
   const demandFrac = Math.max(0.05, Math.min(1, baseFrac * priceMultiplier * drawFactor));
   const projectedAttendance = Math.round(arena.crowdMin + (arena.crowdMax - arena.crowdMin) * demandFrac);
 
-  const runShow = () => {
+  // skipShow advances a week with no show booked — used by the Calendar's
+  // "Advance without a show" action. Wages, loan payments, rival-promotion
+  // activity, aging, injury recovery, and title inactivity all still tick
+  // forward exactly as they would after a real show; only this week's own
+  // attendance/revenue/rating/city-growth/history are skipped, since there's
+  // no show to generate them from.
+  const runShow = (skipShow = false) => {
     setRunning(true);
     setShowResult(null);
     setRunShowError(null);
     setTimeout(() => {
       try {
+      const showRan = !skipShow;
       // Every segment already resolved incrementally as it was booked (see
       // resolveSegmentResult) — Start Show just collects what's already
       // decided, then recomputes which matches count toward the repeat-
       // booking staleness check the same way the old code did (only plain
-      // 1v1/tag matches, never scrambles or segments).
-      const matches = segments.map((s) => s.result).filter(Boolean);
+      // 1v1/tag matches, never scrambles or segments). A skipped week never
+      // reads the in-progress draft card — whatever's half-booked stays put
+      // for next week, untouched.
+      const matches = showRan ? segments.map((s) => s.result).filter(Boolean) : [];
       const thisShowMatchupKeys = matches
         .filter((m) => m.format === "match" && !m.isMultiMan)
         .map((m) => [...m.team1.map((w) => w.name), ...m.team2.map((w) => w.name)].sort().join("|"));
 
-      const attendance = Math.max(0, Math.round(projectedAttendance * (0.9 + Math.random() * 0.2)));
+      const attendance = showRan ? Math.max(0, Math.round(projectedAttendance * (0.9 + Math.random() * 0.2))) : 0;
       const revenue = attendance * ticketPrice;
       // Exclusive roster is billed a standing weekly wage regardless of whether they're
       // on this week's card. Per-use freelancers only cost their fee when actually booked.
@@ -2043,7 +2070,7 @@ export default function BookedRingsideEmpire() {
       const sponsorIncome = sponsorActive ? sponsorDeal.weeklyPay : 0;
 
       const loanPayment = loan ? loan.weeklyPayment : 0;
-      let profit = revenue - arena.cost - wrestlerPay - specialtyCost - loanPayment + news.amount + networkIncome + sponsorIncome;
+      let profit = revenue - (showRan ? arena.cost : 0) - wrestlerPay - specialtyCost - loanPayment + news.amount + networkIncome + sponsorIncome;
       const matchLikeRatings = matches.map((m) => m.rating);
       let fullRating = matchLikeRatings.length ? Math.round(matchLikeRatings.reduce((s, r) => s + r, 0) / matchLikeRatings.length) : 0;
 
@@ -2053,10 +2080,12 @@ export default function BookedRingsideEmpire() {
       // penalty (translated from slot count to minutes, since slots no
       // longer exist) and the same maximum size (a totally empty card hits
       // exactly as hard as 5 missing slots used to: -40 rating, -£3,750).
-      const usedShowMinutes = segments.filter((s) => s.result).reduce((sum, s) => sum + s.minutes, 0);
-      const shortfallFrac = Math.max(0, (arena.showMinutes - usedShowMinutes) / arena.showMinutes);
+      // None of this applies to a skipped week — there's no show to be
+      // underbooked, so no penalty for not running one here either.
+      const usedShowMinutes = showRan ? segments.filter((s) => s.result).reduce((sum, s) => sum + s.minutes, 0) : 0;
+      const shortfallFrac = showRan ? Math.max(0, (arena.showMinutes - usedShowMinutes) / arena.showMinutes) : 0;
       let underbookedPenaltyNote = null;
-      if (shortfallFrac > 0 && TIER_RANK[popularityTier(popularity)] >= TIER_RANK.National) {
+      if (showRan && shortfallFrac > 0 && TIER_RANK[popularityTier(popularity)] >= TIER_RANK.National) {
         const ratingHit = Math.round(shortfallFrac * 40);
         const cashHit = Math.round(shortfallFrac * 3750);
         fullRating = Math.max(0, fullRating - ratingHit);
@@ -2117,21 +2146,25 @@ export default function BookedRingsideEmpire() {
       // The break-even rating a show needs to clear scales up with how popular
       // you already are here — a brand-new Backyard-tier promotion only needs a
       // teens/twenties rating to grow, while a well-known city demands a real 35+.
-      const breakEvenRating = clamp(10 + cityPopularity[city] * 0.3, 10, 35);
-      const rawCityDelta = 1 + (fullRating - breakEvenRating) * 0.08 + (networkActive ? NETWORK_POPULARITY_BOOST : 0);
-      const growthDampener = clamp(1 - Math.floor(cityPopularity[city] / 10) * 0.07, 0.3, 1);
-      const growthScale = rawCityDelta > 0 ? growthDampener * rosterQualityMult : growthDampener;
-      const newCityPop = clamp(cityPopularity[city] + rawCityDelta * growthScale, 0, 100);
-      const newVisited = cityVisits[city] > 0 ? visitedCities : [...visitedCities, city];
-      const newDiversityCap = Math.min(100, 15 + (newVisited.length - 1) * 14);
-      const newOverallPopularity = Math.round(Math.min(newDiversityCap, newVisited.reduce((s, c) => s + (c === city ? newCityPop : cityPopularity[c]), 0) / newVisited.length));
-      const newPlayerTier = popularityTier(newOverallPopularity);
-      if (newPlayerTier !== playerLastTier) {
-        setUniverseFeed((feed) => [{ id: `pt-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has ${TIER_RANK[newPlayerTier] > TIER_RANK[playerLastTier] ? "grown" : "shrunk"} to ${newPlayerTier} status!`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
-        setPlayerLastTier(newPlayerTier);
+      // None of this runs on a skipped week — no show, no city movement either
+      // way (good or bad), and no city "visit" gets recorded.
+      if (showRan) {
+        const breakEvenRating = clamp(10 + cityPopularity[city] * 0.3, 10, 35);
+        const rawCityDelta = 1 + (fullRating - breakEvenRating) * 0.08 + (networkActive ? NETWORK_POPULARITY_BOOST : 0);
+        const growthDampener = clamp(1 - Math.floor(cityPopularity[city] / 10) * 0.07, 0.3, 1);
+        const growthScale = rawCityDelta > 0 ? growthDampener * rosterQualityMult : growthDampener;
+        const newCityPop = clamp(cityPopularity[city] + rawCityDelta * growthScale, 0, 100);
+        const newVisited = cityVisits[city] > 0 ? visitedCities : [...visitedCities, city];
+        const newDiversityCap = Math.min(100, 15 + (newVisited.length - 1) * 14);
+        const newOverallPopularity = Math.round(Math.min(newDiversityCap, newVisited.reduce((s, c) => s + (c === city ? newCityPop : cityPopularity[c]), 0) / newVisited.length));
+        const newPlayerTier = popularityTier(newOverallPopularity);
+        if (newPlayerTier !== playerLastTier) {
+          setUniverseFeed((feed) => [{ id: `pt-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has ${TIER_RANK[newPlayerTier] > TIER_RANK[playerLastTier] ? "grown" : "shrunk"} to ${newPlayerTier} status!`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
+          setPlayerLastTier(newPlayerTier);
+        }
+        setCityPopularity((cp) => ({ ...cp, [city]: newCityPop }));
+        setCityVisits((cv) => ({ ...cv, [city]: cv[city] + 1 }));
       }
-      setCityPopularity((cp) => ({ ...cp, [city]: newCityPop }));
-      setCityVisits((cv) => ({ ...cv, [city]: cv[city] + 1 }));
       setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: newBank }]);
 
       const gainedTitles = {};
@@ -2201,12 +2234,12 @@ export default function BookedRingsideEmpire() {
       // Hall of Fame — lifetime records, survive retiring and starting a new
       // promotion. Kept deliberately small: best match, biggest show, longest
       // reign, most reigns by one wrestler. Not trying to be a full stat archive.
-      const bestMatchCandidate = matches.filter((m) => m.format === "match").sort((a, b) => b.rating - a.rating)[0];
+      const bestMatchCandidate = showRan ? matches.filter((m) => m.format === "match").sort((a, b) => b.rating - a.rating)[0] : null;
       if (bestMatchCandidate && bestMatchCandidate.rating > (hallOfFame.bestMatch?.rating ?? -1)) {
         const names = [...bestMatchCandidate.team1, ...(bestMatchCandidate.team2 || [])].map((w) => w.name).join(" vs ");
         setHallOfFame((h) => ({ ...h, bestMatch: { rating: bestMatchCandidate.rating, description: names, companyName, date: scheduledDate.toISOString() } }));
       }
-      if (attendance > (hallOfFame.biggestShow?.attendance ?? -1)) {
+      if (showRan && attendance > (hallOfFame.biggestShow?.attendance ?? -1)) {
         setHallOfFame((h) => ({ ...h, biggestShow: { attendance, companyName, arena: arena.name, city, date: scheduledDate.toISOString() } }));
       }
       reignCandidates.forEach((rc) => {
@@ -2453,7 +2486,9 @@ export default function BookedRingsideEmpire() {
       // Clear deals once they lapse, and occasionally roll fresh offers when you're not under contract.
       if (networkDeal && weekNumber >= networkDeal.expiresWeek) setNetworkDeal(null);
       if (sponsorDeal && weekNumber >= sponsorDeal.expiresWeek) setSponsorDeal(null);
-      const dealPopularity = clamp(popularity + (fullRating - 50) * 0.1, 0, 100); // use this show's freshly-updated popularity feel
+      // Use this show's freshly-updated popularity feel — but a skipped week has
+      // no show to feel good or bad about, so it falls back to plain popularity.
+      const dealPopularity = showRan ? clamp(popularity + (fullRating - 50) * 0.1, 0, 100) : popularity;
       if (!networkActive && Math.random() < DEAL_OFFER_CHANCE) {
         const eligible = NETWORKS.filter((n) => dealPopularity >= n.minPopularity);
         if (eligible.length > 0) {
@@ -2841,8 +2876,8 @@ export default function BookedRingsideEmpire() {
         setUniverseFeed((feed) => [...retiringWrestlers.map((r, i) => ({ id: `ret-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${r.name} has announced their retirement from professional wrestling.${r.holdsTitles.length > 0 ? " Their title(s) have been vacated." : ""}`, type: "rumor", companyId: r.contractedTo })), ...feed].slice(0, 300));
       }
 
-      const record = { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city };
-      setShowHistory((h) => [record, ...h].slice(0, 60));
+      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city } : null;
+      if (record) setShowHistory((h) => [record, ...h].slice(0, 60));
       if (thisShowMatchupKeys.length > 0) {
         setRecentMatchups((prev) => [...thisShowMatchupKeys, ...prev].slice(0, 30));
       }
@@ -2868,16 +2903,33 @@ export default function BookedRingsideEmpire() {
           });
         }
       }
+      // Calendar reminders — fire regardless of whether a show ran this week.
+      // One-off events are removed once fired; recurring ones reschedule
+      // intervalWeeks further out instead of disappearing.
+      const dueEvents = scheduledEvents.filter((e) => e.weekNumber <= weekNumber);
+      if (dueEvents.length > 0) {
+        setUniverseFeed((feed) => [...dueEvents.map((e, i) => ({ id: `cal-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `REMINDER: ${e.label}`, type: "rumor", companyId: "player" })), ...feed].slice(0, 300));
+        setScheduledEvents((ev) => ev
+          .filter((e) => !dueEvents.some((d) => d.id === e.id) || e.recurring)
+          .map((e) => (dueEvents.some((d) => d.id === e.id) && e.recurring ? { ...e, weekNumber: e.weekNumber + e.intervalWeeks } : e)));
+      }
+
       // Achievement-relevant records from this show — matches array is already
       // fresh/local here, so these can be set directly rather than via effect.
-      if (segments.some((s) => s.type === "fatal4")) setBookedFatal4Ever(true);
-      if (segments.some((s) => s.specialtyId === "cage")) setBookedCageEver(true);
+      // A skipped week never reads the in-progress draft card for these either,
+      // since nothing was actually booked or run.
+      if (showRan && segments.some((s) => s.type === "fatal4")) setBookedFatal4Ever(true);
+      if (showRan && segments.some((s) => s.specialtyId === "cage")) setBookedCageEver(true);
       setMaxAttendanceEver((prev) => Math.max(prev, attendance));
       setMaxShowRatingEver((prev) => Math.max(prev, fullRating));
       if (attendance >= arena.crowdMax) setHasSoldOutEver(true);
+      if (showRan) {
+        setTotalShowsRun((n) => n + 1);
+        setTotalMatchesRun((n) => n + matches.filter((m) => m.format === "match").length);
+      } else {
+        setUniverseFeed((feed) => [{ id: `skip-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} ran no show this week — the business ticked along quietly.`, type: "rumor", companyId: "player" }, ...feed].slice(0, 300));
+      }
       setWeekCount((w) => w + 1);
-      setTotalShowsRun((n) => n + 1);
-      setTotalMatchesRun((n) => n + matches.filter((m) => m.format === "match").length);
       setShowResult(record);
       } catch (e) {
         // A show that throws partway through should never leave the button
@@ -2930,6 +2982,7 @@ export default function BookedRingsideEmpire() {
     hasBeenFired, hasRetiredOnce, hasCreatedStableManually, hasCreatedRivalryManually,
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
+    scheduledEvents,
   });
 
   const applySaveSnapshot = (s) => {
@@ -2965,6 +3018,7 @@ export default function BookedRingsideEmpire() {
     setWrestlerReignCounts(s.wrestlerReignCounts || {});
     setMerchStock(s.merchStock || 0); setMerchQualityTier(s.merchQualityTier || 0); setWrestlerMerchSales(s.wrestlerMerchSales || {});
     setRecentMatchups(s.recentMatchups || []);
+    setScheduledEvents(s.scheduledEvents || []);
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setShowResult(null); setGameOver(false); setTab("company");
@@ -3191,6 +3245,7 @@ export default function BookedRingsideEmpire() {
     setStartingCity(null);
     setMerchStock(0); setMerchQualityTier(0); setWrestlerMerchSales({});
     setRecentMatchups([]);
+    setScheduledEvents([]);
     setSegments([]);
     setNotes("");
     setTab("company");
@@ -4180,6 +4235,77 @@ export default function BookedRingsideEmpire() {
           </div>
         )}
 
+        {tab === "calendar" && (
+          <div>
+            <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">CALENDAR</div>
+            <div className="text-[10px] text-[#8B8593] mb-4">Advance time on its own, or schedule a reminder for a future week — one-off or recurring. Running a show still only happens from the Book tab.</div>
+
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <div className="text-lg font-black" style={{ fontFamily: "Anton, sans-serif" }}>YEAR {currentYear} &middot; WEEK {weekOfYear(weekNumber)}</div>
+                  <div className="text-[10px] text-[#8B8593]">{formatDate(scheduledDate)}</div>
+                </div>
+                <button
+                  onClick={() => runShow(true)}
+                  disabled={running || gameOver}
+                  className="px-4 py-2.5 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD] font-black tracking-wide text-xs rounded transition-colors"
+                >
+                  {running ? "ADVANCING..." : "ADVANCE WITHOUT A SHOW"}
+                </button>
+              </div>
+              <div className="text-[9px] text-[#8B8593] italic mt-2">Wages, loan payments, aging, injury recovery, and the rest of the wrestling world keep moving — you just won't run a show or earn gate/merch revenue this week. Any card you've started booking stays exactly as you left it.</div>
+            </div>
+
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
+              <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">SCHEDULE A REMINDER</div>
+              <input
+                type="text" value={newEventLabel} onChange={(e) => setNewEventLabel(e.target.value)}
+                placeholder="e.g. Renew Jordan's contract"
+                className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mb-2"
+              />
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] text-[#8B8593]">In</span>
+                <input
+                  type="number" min={1} value={newEventWeeksOut}
+                  onChange={(e) => setNewEventWeeksOut(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-16 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-xs text-center"
+                />
+                <span className="text-[10px] text-[#8B8593]">week(s){newEventRecurring ? ", repeating" : ""}</span>
+                <label className="flex items-center gap-1.5 text-[10px] text-[#8B8593] ml-2 cursor-pointer">
+                  <input type="checkbox" checked={newEventRecurring} onChange={(e) => setNewEventRecurring(e.target.checked)} />
+                  Recurring
+                </label>
+                <button onClick={addScheduledEvent} disabled={!newEventLabel.trim()} className="ml-auto px-3 py-1.5 rounded text-[10px] font-bold bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD]">
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+              <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">UPCOMING</div>
+              {scheduledEvents.length === 0 ? (
+                <div className="text-xs text-[#8B8593] italic">Nothing scheduled — add a reminder above.</div>
+              ) : (
+                <div className="space-y-2">
+                  {[...scheduledEvents].sort((a, b) => a.weekNumber - b.weekNumber).map((e) => (
+                    <div key={e.id} className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2">
+                      <div>
+                        <div className="text-xs font-semibold">{e.label}</div>
+                        <div className="text-[9px] text-[#8B8593]">
+                          {formatDate(addWeeks(START_DATE, e.weekNumber - 1))} &middot; {e.weekNumber - weekNumber <= 0 ? "due" : `in ${e.weekNumber - weekNumber} week(s)`}
+                          {e.recurring ? ` · repeats every ${e.intervalWeeks} week(s)` : ""}
+                        </div>
+                      </div>
+                      <button onClick={() => removeScheduledEvent(e.id)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {tab === "wrestlers" && (
           <div>
             <div className="flex gap-2 mb-4">
@@ -4905,7 +5031,7 @@ export default function BookedRingsideEmpire() {
                 <div className="booked-mono text-[10px] text-red-300 whitespace-pre-wrap break-words">{runShowError}</div>
               </div>
             )}
-            <button onClick={runShow} disabled={!readyToRun || running} className="w-full py-3.5 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD] font-black tracking-widest text-sm rounded transition-colors" style={{ fontFamily: "Anton, sans-serif" }}>
+            <button onClick={() => runShow()} disabled={!readyToRun || running} className="w-full py-3.5 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD] font-black tracking-widest text-sm rounded transition-colors" style={{ fontFamily: "Anton, sans-serif" }}>
               {running ? "RUNNING THE SHOW..." : "RUN THE SHOW"}
             </button>
           </div>
@@ -5573,6 +5699,7 @@ export default function BookedRingsideEmpire() {
             <div className="space-y-2.5">
               {[
                 { key: "storylines", label: "Storylines", desc: `${Object.keys(storylines).length + Object.keys(stableStorylines).length} active`, icon: Flame },
+                { key: "calendar", label: "Calendar", desc: `${scheduledEvents.length} event${scheduledEvents.length === 1 ? "" : "s"} scheduled`, icon: Calendar },
                 { key: "wrestlers", label: "Wrestlers", desc: "Browse & hire the full pool", icon: UserPlus },
                 { key: "promotions", label: "Promotions", desc: "Rival companies", icon: Globe2 },
                 { key: "deals", label: "Deals", desc: "TV networks & sponsors", icon: Tv },
