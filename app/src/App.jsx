@@ -1154,6 +1154,19 @@ function rivalShowMinutes(popularity) {
 // the bigger you already are.
 const FEEDER_SETUP_COSTS = { Unknown: 50000, Local: 75000, Regional: 125000, National: 250000, Global: 500000 };
 
+// Production value — pyro, titantron, lighting rig, camera/broadcast quality
+// — bundled into one spectacle tier rather than four separate sliders nobody
+// would touch individually. A one-time capital upgrade (Back Office), plus
+// a weekly upkeep once past Basic, same shape as Staff: it raises the match
+// rating ceiling (ratingBonus, stacked with staffRatingBonus) and makes your
+// broadcast worth more to a TV network (tvMult, applied to network income).
+const PRODUCTION_TIERS = [
+  { name: "Minimal", cost: 0, upkeep: 0, ratingBonus: 0, tvMult: 1 },
+  { name: "Basic", cost: 15000, upkeep: 0, ratingBonus: 2, tvMult: 1.1 },
+  { name: "Enhanced", cost: 60000, upkeep: 300, ratingBonus: 5, tvMult: 1.25 },
+  { name: "Spectacle", cost: 200000, upkeep: 900, ratingBonus: 9, tvMult: 1.45 },
+];
+
 // Speciality Matches — gated by company level, cost extra to book, and boost the
 // rating ceiling. Each type is driven by whichever stat fits it best, blended into
 // the win probability alongside overall ATTR — so a specialist can upset a bigger
@@ -1600,7 +1613,7 @@ const GUIDE_SECTIONS = [
   {
     key: "backoffice", title: "Back Office & Saving", icon: NotebookPen,
     body: [
-      "Back Office (Menu) is where your company name and your own promoter name, age, and sex are edited — kept separate from the day-to-day screens since they're not something you're changing often.",
+      "Back Office (Menu) is where your company name and your own promoter name, age, and sex are edited — kept separate from the day-to-day screens since they're not something you're changing often. It's also where you found a Developmental feeder promotion and upgrade Production (pyro, titantron, lighting, cameras) — both one-time capital investments.",
       "Saves (Menu) has one manual save button plus an automatic save that updates after every show as a safety net — no more juggling numbered slots.",
       "Retire (under Saves) ends your current run on your own terms, files it under Previous Games same as getting fired, and starts you fresh with a new home city to choose. Reset Full Progress, in the same place, wipes everything — including lifetime Achievements and Hall of Fame — and can't be undone.",
     ],
@@ -1704,6 +1717,7 @@ export default function BookedRingsideEmpire() {
   const [workingAgreements, setWorkingAgreements] = useState([]); // rival company ids
   const [feederCompany, setFeederCompany] = useState(null); // { name, foundedWeek }
   const [newFeederName, setNewFeederName] = useState("");
+  const [productionTier, setProductionTier] = useState(0); // index into PRODUCTION_TIERS
   const [staffPool, setStaffPool] = useState(() => buildStaffPool());
   const [staffSubTab, setStaffSubTab] = useState("agent");
   const [hiringStaffTarget, setHiringStaffTarget] = useState(null);
@@ -2050,6 +2064,15 @@ export default function BookedRingsideEmpire() {
     setFeederCompany({ name: newFeederName.trim(), foundedWeek: weekNumber });
     setUniverseFeed((feed) => [{ id: `feeder-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has invested £${feederSetupCost.toLocaleString()} to found ${newFeederName.trim()} as a developmental feeder promotion. The Developmental show level and roster assignment are now unlocked.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
     setNewFeederName("");
+  };
+
+  const nextProductionTier = PRODUCTION_TIERS[productionTier + 1] || null;
+  const upgradeProduction = () => {
+    if (!nextProductionTier || bank < nextProductionTier.cost) return;
+    setBank((b) => b - nextProductionTier.cost);
+    setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - nextProductionTier.cost }]);
+    setProductionTier((t) => t + 1);
+    setUniverseFeed((feed) => [{ id: `prod-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has invested £${nextProductionTier.cost.toLocaleString()} upgrading production to ${nextProductionTier.name} — pyro, titantron, lighting, and camera work all get a boost.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
   };
 
   // World Editor — direct create/edit/delete for wrestlers and companies, plus
@@ -2416,6 +2439,11 @@ export default function BookedRingsideEmpire() {
   const medicalInjuryFactor = 1 - (bestMedicalSkill / 100) * 0.5;
   const ringCrewCatastropheFactor = 1 - (bestRingCrewSkill / 100) * 0.5;
   const staffWeeklyPayroll = hiredStaff.reduce((sum, s) => sum + staffWeeklyWage(s.skill), 0);
+  // Production (pyro, titantron, lighting, cameras) stacks with the Staff
+  // bonus above rather than replacing it — one's people, the other's gear.
+  const productionRatingBonus = PRODUCTION_TIERS[productionTier].ratingBonus;
+  const showQualityBonus = staffRatingBonus + productionRatingBonus;
+  const productionWeeklyUpkeep = PRODUCTION_TIERS[productionTier].upkeep;
   const startHiringStaff = (s) => { setHiringStaffTarget(s); setStaffHireWeeks(26); };
   const confirmHireStaff = () => {
     if (!hiringStaffTarget) return;
@@ -2453,7 +2481,7 @@ export default function BookedRingsideEmpire() {
       // genuinely going off-script, at a small energy cost (see the weekly
       // tick) instead of a promo's usual energy recovery.
       const brawl = angleType === "confrontation" && !!subject && Math.random() < 0.25;
-      const rating = Math.min(100, Math.min(cap, rawRating + staffRatingBonus) + (brawl ? 6 : 0));
+      const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus) + (brawl ? 6 : 0));
       return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, titleInfo: null };
     }
     if (seg.type === "triple" || seg.type === "fatal4") {
@@ -2474,7 +2502,7 @@ export default function BookedRingsideEmpire() {
       let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread) + 3)); // scrambles run a touch hotter
       const specialty = seg.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === seg.specialtyId) : null;
       if (specialty) rating = Math.min(cap, rating + specialty.ratingBonus);
-      rating = Math.min(cap, rating + staffRatingBonus);
+      rating = Math.min(cap, rating + showQualityBonus);
       let titleInfo = null;
       if (seg.titleId) {
         const title = titles.find((t) => t.id === seg.titleId);
@@ -2562,7 +2590,7 @@ export default function BookedRingsideEmpire() {
         titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
       }
     }
-    rating = Math.min(cap, rating + staffRatingBonus);
+    rating = Math.min(cap, rating + showQualityBonus);
     return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod: pickWinMethod(winnerTeam) };
   };
 
@@ -2737,12 +2765,12 @@ export default function BookedRingsideEmpire() {
       const networkActive = networkDeal && weekNumber < networkDeal.expiresWeek
         && (!networkDeal.eventTemplateId || (showRan && activeEventTemplate?.id === networkDeal.eventTemplateId));
       const networkViewers = networkActive ? Math.round(popularity * networkDeal.viewerMult) : 0;
-      const networkIncome = networkActive ? Math.round(networkViewers * networkDeal.payPerViewer) : 0;
+      const networkIncome = networkActive ? Math.round(networkViewers * networkDeal.payPerViewer * PRODUCTION_TIERS[productionTier].tvMult) : 0;
       const sponsorActive = sponsorDeal && weekNumber < sponsorDeal.expiresWeek;
       const sponsorIncome = sponsorActive ? sponsorDeal.weeklyPay : 0;
 
       const loanPayment = loan ? loan.weeklyPayment : 0;
-      let profit = revenue - (showRan ? arena.cost + travelSurcharge : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll + news.amount + networkIncome + sponsorIncome;
+      let profit = revenue - (showRan ? arena.cost + travelSurcharge : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll - productionWeeklyUpkeep + news.amount + networkIncome + sponsorIncome;
       const matchLikeRatings = matches.map((m) => m.rating);
       let fullRating = matchLikeRatings.length ? Math.round(matchLikeRatings.reduce((s, r) => s + r, 0) / matchLikeRatings.length) : 0;
 
@@ -3852,7 +3880,7 @@ export default function BookedRingsideEmpire() {
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
     scheduledEvents, eventTemplates, workingAgreements, feederCompany,
-    staffPool,
+    staffPool, productionTier,
   });
 
   const applySaveSnapshot = (s) => {
@@ -3895,6 +3923,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates(s.eventTemplates || []);
     setWorkingAgreements(s.workingAgreements || []);
     setFeederCompany(s.feederCompany || null);
+    setProductionTier(s.productionTier ?? 0);
     setStaffPool(s.staffPool || buildStaffPool());
     setArenaIdx(1); setCity(null);
     setSegments([]);
@@ -4143,6 +4172,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates([]);
     setWorkingAgreements([]);
     setFeederCompany(null);
+    setProductionTier(0);
     setStaffPool(buildStaffPool());
     setSegments([]);
     setDarkMatches([]);
@@ -6409,6 +6439,7 @@ export default function BookedRingsideEmpire() {
                     <div className="flex justify-between pt-1.5 border-t border-[#2B2733]"><span className="text-[#8B6BC0] font-bold">Show total</span><span className="font-bold text-[#8B6BC0]">£{projectedShowCost.toLocaleString()}</span></div>
                     <div className="flex justify-between text-[#5A5660]"><span>Roster payroll (weekly)</span><span>£{projectedPayroll.toLocaleString()}</span></div>
                     {staffWeeklyPayroll > 0 && <div className="flex justify-between text-[#5A5660]"><span>Staff payroll (weekly)</span><span>£{staffWeeklyPayroll.toLocaleString()}</span></div>}
+                    {productionWeeklyUpkeep > 0 && <div className="flex justify-between text-[#5A5660]"><span>Production upkeep (weekly)</span><span>£{productionWeeklyUpkeep.toLocaleString()}</span></div>}
                   </div>
                 </div>
 
@@ -7108,6 +7139,24 @@ export default function BookedRingsideEmpire() {
                     </button>
                   </div>
                 </>
+              )}
+            </div>
+
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
+              <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">PRODUCTION</div>
+              <div className="text-[10px] text-[#8B8593] mb-3">Pyro, titantron, lighting rig, camera and broadcast quality — bundled into one spectacle tier. Raises your match rating ceiling (stacks with Staff) and what a TV network will pay for the broadcast.</div>
+              <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2.5 mb-3">
+                <div>
+                  <div className="text-xs font-bold">{PRODUCTION_TIERS[productionTier].name}</div>
+                  <div className="text-[10px] text-[#8B8593]">+{productionRatingBonus} rating &middot; {PRODUCTION_TIERS[productionTier].tvMult}x TV value{productionWeeklyUpkeep > 0 ? ` · £${productionWeeklyUpkeep.toLocaleString()}/wk upkeep` : " · no weekly upkeep"}</div>
+                </div>
+              </div>
+              {nextProductionTier ? (
+                <button onClick={upgradeProduction} disabled={bank < nextProductionTier.cost} className="w-full px-4 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
+                  Upgrade to {nextProductionTier.name} (£{nextProductionTier.cost.toLocaleString()})
+                </button>
+              ) : (
+                <div className="text-[10px] text-[#8B8593] italic">Top-tier production — nothing left to upgrade.</div>
               )}
             </div>
 
