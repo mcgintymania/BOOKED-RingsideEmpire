@@ -229,6 +229,18 @@ function makeSegment(format) {
   };
 }
 
+// Dark matches: an optional, unrated 1v1 before or after the card proper —
+// doesn't touch the time budget, the show rating, or win/loss records, just
+// gets an off-card body some reps (a small shot at a stat/training bump and
+// a little energy cost) the same way an untelevised dark match would in a
+// real promotion. Same module-level id counter pattern as segments, for the
+// same reason — not saved, doesn't need to survive a reload.
+const DARK_MATCH_CAP_PER_TIMING = 3;
+let nextDarkMatchId = 1;
+function makeDarkMatch(timing) {
+  return { id: nextDarkMatchId++, timing, a: null, b: null, result: null };
+}
+
 
 // Longer contracts cost proportionally more, but now that a signed wrestler costs
 // nothing extra per show, the multiplier is steeper than before — you're buying
@@ -1755,6 +1767,7 @@ export default function BookedRingsideEmpire() {
   const rawPopularity = visitedCities.length > 0 ? visitedCities.reduce((s, c) => s + cityPopularity[c], 0) / visitedCities.length : 0;
   const popularity = visitedCities.length > 0 ? Math.round(Math.min(rawPopularity, cityDiversityCap)) : 0;
   const [segments, setSegments] = useState([]);
+  const [darkMatches, setDarkMatches] = useState([]);
 
   const [titles, setTitles] = useState([
     { id: "world", name: "World Championship", type: "singles", weightClass: null, genderLock: null, holders: [], reignStartWeek: null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] },
@@ -2541,7 +2554,33 @@ export default function BookedRingsideEmpire() {
   const setSegmentSpecialty = (id, specialtyId) => updateSegment(id, (s) => ({ ...s, specialtyId }));
   const setSegmentMinutes = (id, minutes) => updateSegment(id, (s) => ({ ...s, minutes: clamp(minutes, SEGMENT_MIN_MINUTES, SEGMENT_MAX_MINUTES) }));
 
-  const usedNames = new Set(segments.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).map((w) => w.name));
+  // Dark matches resolve the same way a segment does — the moment both
+  // sides are filled, roll a winner (for flavor text only; it never touches
+  // win/loss records, rankings, or the show rating) using the same
+  // ability-scaled odds as a real match.
+  const resolveDarkMatchResult = (d) => {
+    if (!d.a || !d.b) return null;
+    const probA = attrOf(d.a) / (attrOf(d.a) + attrOf(d.b));
+    return { a: d.a, b: d.b, winner: Math.random() < probA ? d.a.name : d.b.name };
+  };
+  const updateDarkMatch = (id, fn) => {
+    setDarkMatches((prev) => prev.map((d) => {
+      if (d.id !== id) return d;
+      const updated = fn(d);
+      return { ...updated, result: resolveDarkMatchResult(updated) };
+    }));
+  };
+  const addDarkMatch = (timing) => setDarkMatches((prev) => (prev.filter((d) => d.timing === timing).length >= DARK_MATCH_CAP_PER_TIMING ? prev : [...prev, makeDarkMatch(timing)]));
+  const removeDarkMatch = (id) => setDarkMatches((prev) => prev.filter((d) => d.id !== id));
+  const setDarkMatchMember = (id, side, wrestler) => updateDarkMatch(id, (d) => ({ ...d, [side]: wrestler }));
+
+  // Shared across the main card AND dark matches — someone working a dark
+  // match is off the board for the card and vice versa, since the whole
+  // point is reps for people NOT on tonight's rated card.
+  const usedNames = new Set([
+    ...segments.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).map((w) => w.name),
+    ...darkMatches.flatMap((d) => [d.a, d.b]).filter(Boolean).map((w) => w.name),
+  ]);
   // A Developmental show never gets the bigger rooms, however big the company —
   // it's a lower-profile card by design, not a cost-saving version of the same show.
   const DEVELOPMENTAL_MAX_ARENA_IDX = 1;
@@ -2602,6 +2641,10 @@ export default function BookedRingsideEmpire() {
       // reads the in-progress draft card — whatever's half-booked stays put
       // for next week, untouched.
       const matches = showRan ? segments.map((s) => s.result).filter(Boolean) : [];
+      // Dark matches never feed into the rated card — no rating, no time
+      // budget, no wins/losses — they only exist to get an off-card body
+      // some reps. Like the card itself, a skipped week doesn't run them.
+      const darkMatchResults = showRan ? darkMatches.map((d) => d.result).filter(Boolean) : [];
       const thisShowMatchupKeys = matches
         .filter((m) => m.format === "match" && !m.isMultiMan)
         .map((m) => [...m.team1.map((w) => w.name), ...m.team2.map((w) => w.name)].sort().join("|"));
@@ -2609,11 +2652,13 @@ export default function BookedRingsideEmpire() {
       const attendance = showRan ? Math.max(0, Math.round(projectedAttendance * (0.9 + Math.random() * 0.2))) : 0;
       const revenue = attendance * ticketPrice;
       // Exclusive roster is billed a standing weekly wage regardless of whether they're
-      // on this week's card. Per-use freelancers only cost their fee when actually booked.
+      // on this week's card. Per-use freelancers only cost their fee when actually booked —
+      // a dark-match-only freelancer still needs paying to show up and work.
       const payroll = roster.reduce((sum, w) => sum + weeklyWage(w), 0);
-      const freelancersUsed = new Set(
-        matches.flatMap((m) => (m.format === "segment" ? [m.performer] : [...m.team1, ...m.team2])).filter((w) => w.contractedTo === null).map((w) => w.name)
-      );
+      const freelancersUsed = new Set([
+        ...matches.flatMap((m) => (m.format === "segment" ? [m.performer] : [...m.team1, ...m.team2])).filter((w) => w.contractedTo === null).map((w) => w.name),
+        ...darkMatchResults.flatMap((d) => [d.a, d.b]).filter((w) => w.contractedTo === null).map((w) => w.name),
+      ]);
       const freelanceCost = pool.filter((w) => freelancersUsed.has(w.name)).reduce((sum, w) => sum + (w.perUseFee ?? baseFreelanceFee(w)), 0);
       const wrestlerPay = payroll + freelanceCost;
       const news = NEWS_EVENTS[rand(0, NEWS_EVENTS.length - 1)];
@@ -3171,6 +3216,16 @@ export default function BookedRingsideEmpire() {
       const segmentBumps = {};
       matches.forEach((m) => { if (m.format === "segment") segmentBumps[m.performer.name] = Math.max(1, Math.round(m.rating / 30)); });
 
+      // Dark match reps give each participant a small chance of a tiny
+      // permanent bump to a random performance stat — picking up pointers
+      // in an untelevised match, same spirit as the segment bump above.
+      const darkMatchBumps = {};
+      darkMatchResults.forEach((d) => {
+        [d.a, d.b].forEach((w) => {
+          if (Math.random() < 0.2) darkMatchBumps[w.name] = PERFORMANCE_STAT_KEYS[rand(0, PERFORMANCE_STAT_KEYS.length - 1)];
+        });
+      });
+
       // Broken promises: a promised request whose deadline has passed without being
       // marked fulfilled costs real happiness and gets called out in the news.
       const brokenNewsEntries = [];
@@ -3285,12 +3340,14 @@ export default function BookedRingsideEmpire() {
         let next = p.map((w) => {
           const inMatch = matches.find((mm) => mm.format === "match" && (mm.team1.some((x) => x.name === w.name) || mm.team2.some((x) => x.name === w.name)));
           const segmentObj = matches.find((mm) => mm.format === "segment" && mm.performer.name === w.name);
+          const darkMatchObj = darkMatchResults.find((d) => d.a.name === w.name || d.b.name === w.name);
           let withTitle = applyTitleChanges(w);
           withTitle = clearRivalry(withTitle);
           if (withTitle.contractedTo && withTitle.contractExpiresWeek !== null && withTitle.contractExpiresWeek <= weekNumber) {
             withTitle = { ...withTitle, contractedTo: null, contractExpiresWeek: null };
           }
           if (segmentBumps[w.name]) withTitle = { ...withTitle, cha: clamp(withTitle.cha + segmentBumps[w.name], 0, 100) };
+          if (darkMatchBumps[w.name]) withTitle = { ...withTitle, [darkMatchBumps[w.name]]: clamp(withTitle[darkMatchBumps[w.name]] + 1, 0, 100) };
           const evt = rosterEventUpdates[w.name];
           if (evt) {
             if (evt.partner) withTitle = { ...withTitle, partner: evt.partner };
@@ -3360,6 +3417,20 @@ export default function BookedRingsideEmpire() {
             }
           } else if (segmentObj) {
             eng = clamp(eng + rand(ENERGY_CHANGE_SEGMENT[0], ENERGY_CHANGE_SEGMENT[1]), 0, 100);
+          } else if (darkMatchObj) {
+            // Lighter than a real match — no live crowd carrying the pace,
+            // no cameras raising the stakes. Half the energy cost, half the
+            // injury risk of a card match.
+            const delta = Math.round(rand(ENERGY_LOSS_MATCH[0], ENERGY_LOSS_MATCH[1]) * 0.5);
+            eng = clamp(eng - delta, 0, 100);
+            if (eng < INJURY_ENERGY_THRESHOLD && Math.random() < INJURY_CHANCE * 0.5 * medicalInjuryFactor) {
+              const injuryPick = pickInjuryType();
+              injuryWeeksRemaining = Math.max(1, Math.round(rand(INJURY_WEEKS_MIN, INJURY_WEEKS_MAX) * injuryPick.weeksMult));
+              injuryType = injuryPick.name;
+              injuryNewsEntries.push({ text: `${w.name} picked up a ${injuryPick.name.toLowerCase()} injury working a dark match and is expected to be out for ${injuryWeeksRemaining} weeks.`, companyId: updated.contractedTo });
+              newlyInjuredNames.push(w.name);
+              justInjured = true;
+            }
           } else if (rivalShowUsage.has(w.name)) {
             const delta = rand(ENERGY_LOSS_MATCH[0], ENERGY_LOSS_MATCH[1]);
             eng = clamp(eng - delta, 0, 100);
@@ -3400,13 +3471,16 @@ export default function BookedRingsideEmpire() {
           const wasBelowPotential = inDevelopmental && avgStats(aged) < potentialOf(aged) - 0.5;
           if (wasBelowPotential) {
             const pot = potentialOf(aged);
-            const gotRingTime = !!inMatch || !!segmentObj;
+            const gotRingTime = !!inMatch || !!segmentObj || !!darkMatchObj;
             let workedWithVeteran = false;
             if (inMatch) {
               const onTeam1 = inMatch.team1.some((x) => x.name === aged.name);
               const opponentTeam = onTeam1 ? inMatch.team2 : inMatch.team1;
               const opponentAvgAttr = opponentTeam.length ? opponentTeam.reduce((s, x) => s + attrOf(x), 0) / opponentTeam.length : 0;
               workedWithVeteran = opponentAvgAttr - attrOf(aged) >= 20;
+            } else if (darkMatchObj) {
+              const opponent = darkMatchObj.a.name === aged.name ? darkMatchObj.b : darkMatchObj.a;
+              workedWithVeteran = attrOf(opponent) - attrOf(aged) >= 20;
             }
             const trainerChanceBonus = (bestTrainerSkill / 100) * 0.12;
             const chance = Math.min(0.97, (gotRingTime ? 0.85 : 0.5) + trainerChanceBonus);
@@ -3615,6 +3689,7 @@ export default function BookedRingsideEmpire() {
 
   const resetShow = () => {
     setSegments([]);
+    setDarkMatches([]);
     setShowResult(null);
     setCity(null);
   };
@@ -3695,6 +3770,7 @@ export default function BookedRingsideEmpire() {
     setStaffPool(s.staffPool || buildStaffPool());
     setArenaIdx(1); setCity(null);
     setSegments([]);
+    setDarkMatches([]);
     setShowResult(null); setGameOver(false); setTab("company");
   };
 
@@ -3941,6 +4017,7 @@ export default function BookedRingsideEmpire() {
     setFeederCompany(null);
     setStaffPool(buildStaffPool());
     setSegments([]);
+    setDarkMatches([]);
     setNotes("");
     setTab("company");
     setGameOver(false);
@@ -6114,6 +6191,49 @@ export default function BookedRingsideEmpire() {
                   <Plus size={13} /> Add Angle
                 </button>
               </div>
+            </div>
+
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+              <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">PRE-SHOW / POST-SHOW</div>
+              <div className="text-[9px] text-[#8B8593] italic mb-3">Optional dark matches, outside the time budget and the show rating — just reps for someone not on tonight's card. Up to {DARK_MATCH_CAP_PER_TIMING} each.</div>
+              {["pre", "post"].map((timing) => (
+                <div key={timing} className="mb-3 last:mb-0">
+                  <div className="text-[10px] text-[#8B8593] font-bold tracking-wide mb-1.5">{timing === "pre" ? "PRE-SHOW" : "POST-SHOW"}</div>
+                  <div className="space-y-2">
+                    {darkMatches.filter((d) => d.timing === timing).map((d) => (
+                      <div key={d.id} className="bg-[#131117] border border-[#2B2733] rounded-lg p-2.5 space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <select value={d.a?.name || ""} onChange={(e) => setDarkMatchMember(d.id, "a", bookable.find((w) => w.name === e.target.value) || null)} className="flex-1 min-w-0 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                            <option value="">Select wrestler...</option>
+                            {bookable.map((w) => (
+                              <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && d.a?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
+                            ))}
+                          </select>
+                          <span className="text-[10px] text-[#8B6BC0] shrink-0">VS</span>
+                          <select value={d.b?.name || ""} onChange={(e) => setDarkMatchMember(d.id, "b", bookable.find((w) => w.name === e.target.value) || null)} className="flex-1 min-w-0 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                            <option value="">Select wrestler...</option>
+                            {bookable.map((w) => (
+                              <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && d.b?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
+                            ))}
+                          </select>
+                          <button onClick={() => removeDarkMatch(d.id)} className="text-[#8B8593] hover:text-red-400 shrink-0"><X size={14} /></button>
+                        </div>
+                        {d.result && (
+                          <div className="text-[10px] text-[#8B8593] flex items-center gap-1.5">
+                            <Check size={11} className="text-[#8B6BC0]" />
+                            <span className={d.result.winner === d.result.a.name ? "text-[#F2ECDD] font-bold" : "text-[#8B8593] line-through"}>{d.result.a.name}</span>
+                            <span className="text-[#8B6BC0]">vs</span>
+                            <span className={d.result.winner === d.result.b.name ? "text-[#F2ECDD] font-bold" : "text-[#8B8593] line-through"}>{d.result.b.name}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={() => addDarkMatch(timing)} disabled={darkMatches.filter((d) => d.timing === timing).length >= DARK_MATCH_CAP_PER_TIMING} className="mt-1.5 w-full flex items-center justify-center gap-1.5 py-2 text-[11px] font-bold border border-dashed border-[#2B2733] text-[#8B8593] hover:text-[#8B6BC0] hover:border-[#5B3B8C] disabled:opacity-40 disabled:cursor-not-allowed rounded-lg">
+                    <Plus size={12} /> Add {timing === "pre" ? "Pre-Show" : "Post-Show"} Dark Match
+                  </button>
+                </div>
+              ))}
             </div>
             </div>
 
