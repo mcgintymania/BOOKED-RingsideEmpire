@@ -367,6 +367,7 @@ const STAFF_ROLES = [
   { key: "referee", label: "Referee", desc: "Keeps matches under control in the ring — a sharp referee protects a match's floor and keeps a bad night from becoming a disaster." },
   { key: "medical", label: "Medical Staff", desc: "Reduces how often wrestlers get hurt on your shows, and shortens recovery time when they do." },
   { key: "ringcrew", label: "Ring Crew", desc: "Handles setup, safety, and show presentation — a sharp crew cuts down on costly on-site mishaps." },
+  { key: "security", label: "Security", desc: "Keeps the crowd and backstage area under control — a strong team cuts down on the costly incidents and lawsuits that come from a security lapse." },
   { key: "booker", label: "Assistant Booker", desc: "A second set of eyes across the whole card — a strong assistant nudges every show's overall rating up a little." },
   { key: "trainer", label: "Trainer", desc: "Coaches your Developmental prospects directly — the better the trainer, the faster they close the gap to their potential." },
 ];
@@ -1071,8 +1072,19 @@ const CATASTROPHE_REASONS = [
   "A surprise tax audit has landed {company} with a hefty back-payment bill",
   "A sponsor pulled out mid-contract and is suing {company} for breach of terms",
   "An embezzlement scandal within the front office has cost {company} dearly",
-  "A fan was seriously injured at ringside and {company} has been found liable",
   "A data breach exposed customer payment details, and {company} is footing the compensation bill",
+];
+// A separate roll from the general catastrophe above — specifically about
+// crowd and venue security, so it's the Security staff role (not Ring Crew)
+// that cuts it down, and it only fires on a week a show actually ran (no
+// crowd, no security incident). Reuses the exact same plumbing (severity
+// tiers, profit hit, the DISASTER! banner) rather than a parallel system.
+const SECURITY_INCIDENT_CHANCE = 0.012;
+const SECURITY_INCIDENT_REASONS = [
+  "A fight broke out in the crowd and {company} is covering the resulting medical and legal costs",
+  "A fan jumped the barrier and got hurt before security could step in — {company} is on the hook for it",
+  "An unauthorized person talked their way backstage and caused a scene, costing {company} in damages and goodwill",
+  "Overcrowding at the venue led to a safety violation fine for {company}",
 ];
 
 // Goals & requests: wrestlers occasionally ask for something. Promise it and
@@ -2447,6 +2459,7 @@ export default function BookedRingsideEmpire() {
   const bestRefereeSkill = bestStaffSkill("referee");
   const bestMedicalSkill = bestStaffSkill("medical");
   const bestRingCrewSkill = bestStaffSkill("ringcrew");
+  const bestSecuritySkill = bestStaffSkill("security");
   const bestBookerSkill = bestStaffSkill("booker");
   const bestTrainerSkill = bestStaffSkill("trainer");
   // Agents and a sharp referee raise the ceiling a match can realistically hit;
@@ -2455,6 +2468,7 @@ export default function BookedRingsideEmpire() {
   const staffRatingBonus = Math.round((bestAgentSkill / 100) * 6 + (bestRefereeSkill / 100) * 3 + (bestBookerSkill / 100) * 3);
   const medicalInjuryFactor = 1 - (bestMedicalSkill / 100) * 0.5;
   const ringCrewCatastropheFactor = 1 - (bestRingCrewSkill / 100) * 0.5;
+  const securityIncidentFactor = 1 - (bestSecuritySkill / 100) * 0.6;
   const staffWeeklyPayroll = hiredStaff.reduce((sum, s) => sum + staffWeeklyWage(s.skill), 0);
   // Production (pyro, titantron, lighting, cameras) stacks with the Staff
   // bonus above rather than replacing it — one's people, the other's gear.
@@ -2830,6 +2844,17 @@ export default function BookedRingsideEmpire() {
         const severity = CATASTROPHE_SEVERITIES[rand(0, CATASTROPHE_SEVERITIES.length - 1)];
         const hit = Math.round(bank * severity);
         const reason = CATASTROPHE_REASONS[rand(0, CATASTROPHE_REASONS.length - 1)].replace("{company}", companyName);
+        profit -= hit;
+        catastropheEntry = { text: `${reason} — a loss of £${hit.toLocaleString()} (${Math.round(severity * 100)}% of company funds).`, hit };
+        setHasSurvivedCatastrophe(true);
+      }
+      // A separate roll, only possible on a week a show actually ran (no
+      // crowd, no security incident) — capped at one disaster per week so
+      // bad luck doesn't compound into two DISASTER! banners at once.
+      if (!catastropheEntry && showRan && Math.random() < SECURITY_INCIDENT_CHANCE * securityIncidentFactor && bank > 0) {
+        const severity = CATASTROPHE_SEVERITIES[rand(0, CATASTROPHE_SEVERITIES.length - 1)];
+        const hit = Math.round(bank * severity);
+        const reason = SECURITY_INCIDENT_REASONS[rand(0, SECURITY_INCIDENT_REASONS.length - 1)].replace("{company}", companyName);
         profit -= hit;
         catastropheEntry = { text: `${reason} — a loss of £${hit.toLocaleString()} (${Math.round(severity * 100)}% of company funds).`, hit };
         setHasSurvivedCatastrophe(true);
@@ -5692,6 +5717,7 @@ export default function BookedRingsideEmpire() {
               <div className="flex justify-between"><span className="text-[#8B8593]">Match rating bonus</span><span className="font-bold text-[#8B6BC0]">+{staffRatingBonus}</span></div>
               <div className="flex justify-between"><span className="text-[#8B8593]">Injury chance</span><span className="font-bold text-[#8B6BC0]">&minus;{Math.round((1 - medicalInjuryFactor) * 100)}%</span></div>
               <div className="flex justify-between"><span className="text-[#8B8593]">Catastrophe chance</span><span className="font-bold text-[#8B6BC0]">&minus;{Math.round((1 - ringCrewCatastropheFactor) * 100)}%</span></div>
+              <div className="flex justify-between"><span className="text-[#8B8593]">Security incident chance</span><span className="font-bold text-[#8B6BC0]">&minus;{Math.round((1 - securityIncidentFactor) * 100)}%</span></div>
               <div className="flex justify-between"><span className="text-[#8B8593]">Developmental growth odds</span><span className="font-bold text-[#8B6BC0]">+{Math.round((bestTrainerSkill / 100) * 12)}pp</span></div>
               <div className="flex justify-between"><span className="text-[#8B8593]">Staff payroll (weekly)</span><span className="font-bold">£{staffWeeklyPayroll.toLocaleString()}</span></div>
             </div>
