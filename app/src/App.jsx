@@ -1526,6 +1526,16 @@ export default function BookedRingsideEmpire() {
   const [newEventLabel, setNewEventLabel] = useState("");
   const [newEventWeeksOut, setNewEventWeeksOut] = useState(4);
   const [newEventRecurring, setNewEventRecurring] = useState(false);
+  // Event templates — recurring show slots (Weekly TV, Monthly Special, PPV...)
+  // set up ahead of time from the Calendar. Each pre-sets the Book screen's
+  // show level and venue the week it's due; a TV deal can optionally be
+  // attached to exactly one template so it only pays out when that specific
+  // show airs, instead of every main-roster show.
+  const [eventTemplates, setEventTemplates] = useState([]); // { id, name, level, arenaIdx, intervalWeeks, nextWeekNumber }
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateLevel, setNewTemplateLevel] = useState("main");
+  const [newTemplateArenaIdx, setNewTemplateArenaIdx] = useState(0);
+  const [newTemplateIntervalWeeks, setNewTemplateIntervalWeeks] = useState(1);
   const [financeHistory, setFinanceHistory] = useState([{ weekNumber: 0, year: 1, weekOfYear: 0, bank: 20000 }]);
   const [universeFeed, setUniverseFeed] = useState([]);
   const [storylines, setStorylines] = useState({}); // "nameA|nameB" (sorted) -> { intensity, matchesFought }
@@ -1562,6 +1572,30 @@ export default function BookedRingsideEmpire() {
     setNewEventLabel(""); setNewEventWeeksOut(4); setNewEventRecurring(false);
   };
   const removeScheduledEvent = (id) => setScheduledEvents((ev) => ev.filter((e) => e.id !== id));
+
+  const addEventTemplate = () => {
+    if (!newTemplateName.trim()) return;
+    setEventTemplates((ts) => [...ts, {
+      id: `tmpl-${Date.now()}`, name: newTemplateName.trim(), level: newTemplateLevel,
+      arenaIdx: newTemplateArenaIdx, intervalWeeks: Math.max(1, newTemplateIntervalWeeks),
+      nextWeekNumber: weekNumber,
+    }]);
+    // A brand-new template due immediately (this week) won't be picked up by
+    // the week-change effect, since weekNumber itself hasn't changed — apply
+    // its preset to the Book screen right away instead.
+    setShowLevel(newTemplateLevel);
+    setArenaIdx(newTemplateArenaIdx);
+    setTicketPrice(ARENAS[newTemplateArenaIdx].ticketMin);
+    setNewTemplateName(""); setNewTemplateLevel("main"); setNewTemplateArenaIdx(0); setNewTemplateIntervalWeeks(1);
+  };
+  const removeEventTemplate = (id) => {
+    setEventTemplates((ts) => ts.filter((t) => t.id !== id));
+    setNetworkDeal((d) => (d && d.eventTemplateId === id ? { ...d, eventTemplateId: null } : d));
+  };
+  const setNetworkDealEvent = (eventTemplateId) => setNetworkDeal((d) => (d ? { ...d, eventTemplateId: eventTemplateId || null } : d));
+  // The template (if any) due this exact week — drives the Book screen's
+  // auto-preset and which TV deal (if attached to one) pays out.
+  const activeEventTemplate = eventTemplates.find((t) => t.nextWeekNumber === weekNumber) || null;
 
   const roster = pool.filter((w) => w.contractedTo === "player");
   const avgRosterOverall = roster.length > 0 ? Math.round(roster.reduce((s, w) => s + attrOf(w), 0) / roster.length) : 0;
@@ -1663,7 +1697,7 @@ export default function BookedRingsideEmpire() {
   };
 
   const acceptNetworkOffer = (offer) => {
-    setNetworkDeal({ id: offer.id, name: offer.name, payPerViewer: offer.payPerViewer, viewerMult: offer.viewerMult, expiresWeek: weekNumber + offer.weeks });
+    setNetworkDeal({ id: offer.id, name: offer.name, payPerViewer: offer.payPerViewer, viewerMult: offer.viewerMult, expiresWeek: weekNumber + offer.weeks, eventTemplateId: null });
     setNetworkOffers([]);
   };
   const acceptSponsorOffer = (offer) => {
@@ -2075,7 +2109,11 @@ export default function BookedRingsideEmpire() {
 
       // TV network pays per estimated viewer; sponsor pays a flat weekly fee. Both
       // lapse automatically once their deal's week count runs out.
-      const networkActive = networkDeal && weekNumber < networkDeal.expiresWeek;
+      // A deal attached to a specific event template only pays out the week
+      // that exact show airs — an unattached (general) deal still pays every
+      // week it's active, same as before event templates existed.
+      const networkActive = networkDeal && weekNumber < networkDeal.expiresWeek
+        && (!networkDeal.eventTemplateId || (showRan && activeEventTemplate?.id === networkDeal.eventTemplateId));
       const networkViewers = networkActive ? Math.round(popularity * networkDeal.viewerMult) : 0;
       const networkIncome = networkActive ? Math.round(networkViewers * networkDeal.payPerViewer) : 0;
       const sponsorActive = sponsorDeal && weekNumber < sponsorDeal.expiresWeek;
@@ -2925,6 +2963,12 @@ export default function BookedRingsideEmpire() {
           .filter((e) => !dueEvents.some((d) => d.id === e.id) || e.recurring)
           .map((e) => (dueEvents.some((d) => d.id === e.id) && e.recurring ? { ...e, weekNumber: e.weekNumber + e.intervalWeeks } : e)));
       }
+      // Event templates reschedule themselves on their own cadence regardless
+      // of whether this week's show actually ran — a weekly slot moves to next
+      // week either way, same as it would in the real world.
+      if (activeEventTemplate) {
+        setEventTemplates((ts) => ts.map((t) => (t.id === activeEventTemplate.id ? { ...t, nextWeekNumber: t.nextWeekNumber + t.intervalWeeks } : t)));
+      }
 
       // Achievement-relevant records from this show — matches array is already
       // fresh/local here, so these can be set directly rather than via effect.
@@ -2994,7 +3038,7 @@ export default function BookedRingsideEmpire() {
     hasBeenFired, hasRetiredOnce, hasCreatedStableManually, hasCreatedRivalryManually,
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
-    scheduledEvents,
+    scheduledEvents, eventTemplates,
   });
 
   const applySaveSnapshot = (s) => {
@@ -3031,6 +3075,7 @@ export default function BookedRingsideEmpire() {
     setMerchStock(s.merchStock || 0); setMerchQualityTier(s.merchQualityTier || 0); setWrestlerMerchSales(s.wrestlerMerchSales || {});
     setRecentMatchups(s.recentMatchups || []);
     setScheduledEvents(s.scheduledEvents || []);
+    setEventTemplates(s.eventTemplates || []);
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setShowResult(null); setGameOver(false); setTab("company");
@@ -3198,6 +3243,19 @@ export default function BookedRingsideEmpire() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekCount]);
 
+  // A scheduled event template due this week pre-sets the Book screen's show
+  // level and venue — the player still builds and runs the card themselves,
+  // this just saves re-picking the same weekly/monthly/PPV setup every time.
+  useEffect(() => {
+    const due = eventTemplates.find((t) => t.nextWeekNumber === weekCount);
+    if (due) {
+      setShowLevel(due.level);
+      setArenaIdx(due.arenaIdx);
+      setTicketPrice(ARENAS[due.arenaIdx].ticketMin);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekCount]);
+
   const checkAchievements = () => {
     const ctx = {
       tier: popularityTier(popularity), avgRosterOverall, rosterCount: roster.length, roster,
@@ -3258,6 +3316,7 @@ export default function BookedRingsideEmpire() {
     setMerchStock(0); setMerchQualityTier(0); setWrestlerMerchSales({});
     setRecentMatchups([]);
     setScheduledEvents([]);
+    setEventTemplates([]);
     setSegments([]);
     setNotes("");
     setTab("company");
@@ -4282,6 +4341,61 @@ export default function BookedRingsideEmpire() {
             </div>
 
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
+              <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">SHOW EVENTS</div>
+              <div className="text-[10px] text-[#8B8593] mb-3">Set up your recurring shows once — weekly TV, a monthly special, a quarterly PPV — and the Book screen will auto-load that show's level and venue the week it's due. You still build and run the card yourself.</div>
+
+              {eventTemplates.length > 0 && (
+                <div className="space-y-2 mb-3">
+                  {[...eventTemplates].sort((a, b) => a.nextWeekNumber - b.nextWeekNumber).map((t) => (
+                    <div key={t.id} className="bg-[#131117] rounded-lg px-3 py-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold">{t.name} {networkDeal?.eventTemplateId === t.id && <Tv size={11} className="inline text-[#8B6BC0] ml-1" />}</div>
+                          <div className="text-[9px] text-[#8B8593]">
+                            {t.level === "main" ? "Main Roster" : "Developmental"} &middot; {ARENAS[t.arenaIdx].name} &middot; every {t.intervalWeeks} week(s) &middot; next: {formatDate(addWeeks(START_DATE, t.nextWeekNumber - 1))}{t.nextWeekNumber <= weekNumber ? " (this week)" : ""}
+                          </div>
+                        </div>
+                        <button onClick={() => removeEventTemplate(t.id)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>
+                      </div>
+                      {networkDeal && (
+                        <button
+                          onClick={() => setNetworkDealEvent(networkDeal.eventTemplateId === t.id ? null : t.id)}
+                          className={`mt-1.5 text-[9px] font-bold px-2 py-0.5 rounded border ${networkDeal.eventTemplateId === t.id ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"}`}
+                        >
+                          {networkDeal.eventTemplateId === t.id ? "TV deal attached — click to detach" : `Attach ${networkDeal.name} TV deal`}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <input
+                type="text" value={newTemplateName} onChange={(e) => setNewTemplateName(e.target.value)}
+                placeholder="e.g. Monday Night Mayhem"
+                className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mb-2"
+              />
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                {["main", "developmental"].map((lvl) => (
+                  <button key={lvl} onClick={() => setNewTemplateLevel(lvl)} className={`px-2 py-1 rounded text-[10px] font-bold border ${newTemplateLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}>
+                    {lvl === "main" ? "Main Roster" : "Developmental"}
+                  </button>
+                ))}
+                <select value={newTemplateArenaIdx} onChange={(e) => setNewTemplateArenaIdx(Number(e.target.value))} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
+                  {ARENAS.map((ar, i) => <option key={ar.name} value={i}>{ar.name}</option>)}
+                </select>
+                <select value={newTemplateIntervalWeeks} onChange={(e) => setNewTemplateIntervalWeeks(Number(e.target.value))} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
+                  <option value={1}>Weekly</option>
+                  <option value={4}>Monthly</option>
+                  <option value={13}>Quarterly (PPV-style)</option>
+                </select>
+                <button onClick={addEventTemplate} disabled={!newTemplateName.trim()} className="ml-auto px-3 py-1.5 rounded text-[10px] font-bold bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD]">
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
               <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">SCHEDULE A REMINDER</div>
               <input
                 type="text" value={newEventLabel} onChange={(e) => setNewEventLabel(e.target.value)}
@@ -4583,6 +4697,11 @@ export default function BookedRingsideEmpire() {
                     £{networkDeal.payPerViewer.toFixed(2)}/viewer &middot; ~{Math.round(popularity * networkDeal.viewerMult).toLocaleString()} viewers &middot; £{Math.round(popularity * networkDeal.viewerMult * networkDeal.payPerViewer).toLocaleString()}/wk
                   </div>
                   <div className="text-[10px] text-[#8B8593] mt-1">{networkDeal.expiresWeek - weekNumber} weeks remaining</div>
+                  <div className="text-[9px] text-[#8B8593] mt-1 italic">
+                    {networkDeal.eventTemplateId
+                      ? `Pays out only when ${eventTemplates.find((t) => t.id === networkDeal.eventTemplateId)?.name ?? "its attached show"} airs — attach/detach from Calendar · Show Events.`
+                      : "Pays out every week the deal is active, whether or not you run a show — attach it to a specific show from Calendar · Show Events to only pay out when that show airs."}
+                  </div>
                 </div>
               ) : networkOffers.length > 0 ? (
                 <div className="space-y-2">
