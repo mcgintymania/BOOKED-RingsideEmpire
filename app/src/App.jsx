@@ -2660,6 +2660,7 @@ export default function BookedRingsideEmpire() {
 
       const injuryNewsEntries = [];
       const newlyInjuredNames = []; // wrestler names injured this tick, any title they hold gets vacated below
+      const retiringWrestlers = []; // { name, contractedTo, holdsTitles } — removed from the pool below, titles vacated after
       setPool((p) => {
         let next = p.map((w) => {
           const inMatch = matches.find((mm) => mm.format === "match" && (mm.team1.some((x) => x.name === w.name) || mm.team2.some((x) => x.name === w.name)));
@@ -2776,10 +2777,22 @@ export default function BookedRingsideEmpire() {
               aged = { ...aged, [veteranStat]: clamp(aged[veteranStat] + 1, 0, 100) };
             }
             aged = { ...aged, tier: tierFromAvg(avgStats(aged)) };
+            // Retirement — a real chance from 46 on, climbing with age, certain at 60.
+            // Keeps the roster turning over instead of just accumulating veterans forever.
+            if (newAge >= 46) {
+              const retireChance = newAge >= 60 ? 1 : clamp((newAge - 45) * 0.06, 0, 0.9);
+              if (Math.random() < retireChance) {
+                retiringWrestlers.push({ name: aged.name, contractedTo: aged.contractedTo, holdsTitles: aged.holdsTitles });
+              }
+            }
           }
           return aged;
         });
         if (poolWithGrowth) next = [...next, ...poolWithGrowth];
+        if (retiringWrestlers.length > 0) {
+          const retiringNames = new Set(retiringWrestlers.map((r) => r.name));
+          next = next.filter((w) => !retiringNames.has(w.name));
+        }
         return next;
       });
       if (injuryNewsEntries.length > 0) {
@@ -2806,6 +2819,26 @@ export default function BookedRingsideEmpire() {
           setRivalTitles((ts) => ts.map((t) => (vacatedRivalTitles.some((v) => v.id === t.id) ? { ...t, holder: null } : t)));
           setUniverseFeed((feed) => [...vacatedRivalTitles.map((t, i) => ({ id: `rvac-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `The ${t.name} has been vacated due to injury.`, type: "injury", companyId: t.companyId })), ...feed].slice(0, 300));
         }
+      }
+
+      if (retiringWrestlers.length > 0) {
+        const retiringNames = retiringWrestlers.map((r) => r.name);
+        const vacatedPlayerTitlesForRetirement = titles.filter((t) => t.holders.some((h) => retiringNames.includes(h)));
+        if (vacatedPlayerTitlesForRetirement.length > 0) {
+          setTitles((ts) => ts.map((t) => {
+            if (!vacatedPlayerTitlesForRetirement.some((v) => v.id === t.id)) return t;
+            return {
+              ...t, holders: [], reignStartWeek: null, currentReignDefenses: 0,
+              history: [...t.history, { holderNames: t.holders, reignWeeks: t.reignStartWeek !== null ? weekNumber - t.reignStartWeek : 0, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByRetirement: true }],
+            };
+          }));
+        }
+        const vacatedRivalTitlesForRetirement = rivalTitles.filter((t) => t.holder && retiringNames.includes(t.holder));
+        if (vacatedRivalTitlesForRetirement.length > 0) {
+          setRivalTitles((ts) => ts.map((t) => (vacatedRivalTitlesForRetirement.some((v) => v.id === t.id) ? { ...t, holder: null } : t)));
+        }
+        setPerUseRoster((pu) => pu.filter((n) => !retiringNames.includes(n)));
+        setUniverseFeed((feed) => [...retiringWrestlers.map((r, i) => ({ id: `ret-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${r.name} has announced their retirement from professional wrestling.${r.holdsTitles.length > 0 ? " Their title(s) have been vacated." : ""}`, type: "rumor", companyId: r.contractedTo })), ...feed].slice(0, 300));
       }
 
       const record = { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city };
