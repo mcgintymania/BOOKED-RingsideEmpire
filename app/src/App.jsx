@@ -452,13 +452,26 @@ function feudStage(intensity) {
 function avgStats(w) {
   return PERFORMANCE_STAT_KEYS.reduce((s, k) => s + w[k], 0) / PERFORMANCE_STAT_KEYS.length;
 }
+// A hidden ceiling rolled once at creation — how far a wrestler's average can
+// realistically climb with training. Younger wrestlers get more headroom;
+// by the mid-30s there's little to no room left, same as real careers.
+function rollPotential(avg, age) {
+  const youthBonus = clamp(35 - age, 0, 20);
+  return clamp(Math.round(avg + rand(0, 10) + youthBonus), Math.round(avg), 100);
+}
+// Older saves/pools predate the potential field — fall back to a value
+// derived from current stats/age rather than requiring a save migration.
+function potentialOf(w) {
+  return w.potential ?? rollPotential(avgStats(w), w.age);
+}
 function makeWrestler(name) {
   const stats = {};
   PERFORMANCE_STAT_KEYS.forEach((k) => { stats[k] = rand(20, 95); });
   const avg = PERFORMANCE_STAT_KEYS.reduce((s, k) => s + stats[k], 0) / PERFORMANCE_STAT_KEYS.length;
+  const age = rand(19, 45);
   return {
-    name, age: rand(19, 45), sex: Math.random() < 0.5 ? "Male" : "Female",
-    tier: tierFromAvg(avg), ...stats, eng: rand(70, 100),
+    name, age, sex: Math.random() < 0.5 ? "Male" : "Female",
+    tier: tierFromAvg(avg), ...stats, eng: rand(70, 100), potential: rollPotential(avg, age),
     weightClass: WEIGHT_CLASSES[rand(0, WEIGHT_CLASSES.length - 1)],
     alignment: ALIGNMENTS[rand(0, ALIGNMENTS.length - 1)],
     matches: 0, wins: 0, losses: 0, rankingPts: 0, titleReigns: 0, holdsTitles: [],
@@ -483,9 +496,10 @@ function makeWrestlerFromOverall(name, overall, opts = {}) {
     }
   });
   const avg = PERFORMANCE_STAT_KEYS.reduce((s, k) => s + stats[k], 0) / PERFORMANCE_STAT_KEYS.length;
+  const age = opts.age ?? rand(19, 45);
   return {
-    name, age: opts.age ?? rand(19, 45), sex: opts.sex || (Math.random() < 0.5 ? "Male" : "Female"),
-    tier: tierFromAvg(avg), ...stats, eng: rand(70, 100),
+    name, age, sex: opts.sex || (Math.random() < 0.5 ? "Male" : "Female"),
+    tier: tierFromAvg(avg), ...stats, eng: rand(70, 100), potential: rollPotential(avg, age),
     weightClass: opts.weightClass || WEIGHT_CLASSES[rand(0, WEIGHT_CLASSES.length - 1)],
     alignment: opts.alignment || ALIGNMENTS[rand(0, ALIGNMENTS.length - 1)],
     matches: 0, wins: 0, losses: 0, rankingPts: 0, titleReigns: 0, holdsTitles: [],
@@ -1130,6 +1144,7 @@ function WrestlerDetailModal({ wrestler, pool, titles, weekNumber, perUseRoster,
         </div>
         <div className="text-[11px] text-[#8B6BC0] font-bold tracking-wide mb-1">
           {effectiveTier(wrestler).toUpperCase()} &middot; ATTR {Math.round(attrOf(wrestler))} &middot; DRAW {Math.round(wrestler.drawPower ?? 50)} &middot; #{position} RANKED
+          {wrestler.contractedTo === "player" && (wrestler.rosterLevel || "main") === "developmental" && <> &middot; POTENTIAL {Math.round(potentialOf(wrestler))}</>}
         </div>
         <div className="text-[10px] text-[#8B8593] mb-1">
           {wrestler.age} yrs &middot; {wrestler.sex} &middot; {wrestler.weightClass} &middot; {employer}
@@ -3084,6 +3099,7 @@ export default function BookedRingsideEmpire() {
       const injuryNewsEntries = [];
       const newlyInjuredNames = []; // wrestler names injured this tick, any title they hold gets vacated below
       const retiringWrestlers = []; // { name, contractedTo, holdsTitles } — removed from the pool below, titles vacated after
+      const developmentBreakoutNames = []; // developmental talent that trained up to their potential this tick
       setPool((p) => {
         let next = p.map((w) => {
           const inMatch = matches.find((mm) => mm.format === "match" && (mm.team1.some((x) => x.name === w.name) || mm.team2.some((x) => x.name === w.name)));
@@ -3187,6 +3203,28 @@ export default function BookedRingsideEmpire() {
           // (ability label) gets recomputed since raw stats may have genuinely
           // changed; a manual push override is untouched either way.
           let aged = { ...updated, eng, injuryWeeksRemaining, injuryType, happiness };
+
+          // Developmental training — exclusive talent assigned to the feeder
+          // promotion trains toward their potential every week, faster (and
+          // more reliably) on a week they actually got ring time. Growth
+          // stops once they've closed the gap — that's what "developed" means.
+          if (aged.contractedTo === "player" && aged.rosterLevel === "developmental") {
+            const pot = potentialOf(aged);
+            const avgBefore = avgStats(aged);
+            if (avgBefore < pot - 0.5) {
+              const gotRingTime = !!inMatch || !!segmentObj;
+              if (Math.random() < (gotRingTime ? 0.85 : 0.5)) {
+                const growCount = gotRingTime && Math.random() < 0.4 ? 2 : 1;
+                for (let g = 0; g < growCount; g++) {
+                  const statKey = PERFORMANCE_STAT_KEYS[rand(0, PERFORMANCE_STAT_KEYS.length - 1)];
+                  aged = { ...aged, [statKey]: clamp(aged[statKey] + rand(1, 3), 0, 100) };
+                }
+                aged = { ...aged, tier: tierFromAvg(avgStats(aged)) };
+                if (avgStats(aged) >= pot - 0.5) developmentBreakoutNames.push(aged.name);
+              }
+            }
+          }
+
           if (weekNumber % WEEKS_PER_YEAR === 0) {
             const newAge = aged.age + 1;
             aged = { ...aged, age: newAge };
@@ -3220,6 +3258,9 @@ export default function BookedRingsideEmpire() {
       });
       if (injuryNewsEntries.length > 0) {
         setUniverseFeed((feed) => [...injuryNewsEntries.map((e, i) => ({ id: `inj-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "injury", companyId: e.companyId })), ...feed].slice(0, 300));
+      }
+      if (developmentBreakoutNames.length > 0) {
+        setUniverseFeed((feed) => [...developmentBreakoutNames.map((name, i) => ({ id: `dev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${name} has developed into a legitimate prospect — they've outgrown what Developmental can teach them and are ready for the main roster.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
       }
       if (newlyInjuredNames.length > 0) {
         // Check the titles themselves directly by holder name — simpler and more
@@ -4564,6 +4605,18 @@ export default function BookedRingsideEmpire() {
                         </button>
                       )}
                     </div>
+                    {(w.rosterLevel || "main") === "developmental" && (() => {
+                      const pot = Math.round(potentialOf(w));
+                      const cur = Math.round(avgStats(w));
+                      const pct = Math.min(100, Math.round((cur / Math.max(1, pot)) * 100));
+                      const done = cur >= pot - 0.5;
+                      return (
+                        <div className="mt-1.5">
+                          <div className="flex justify-between text-[9px] text-[#8B8593] mb-0.5"><span>Training &middot; Potential {pot}</span><span className="text-[#F2ECDD] font-bold">{done ? "Maxed out" : `${pct}%`}</span></div>
+                          <div className="h-1 bg-[#0A0A0C] rounded-full overflow-hidden"><div className="h-full bg-[#8B6BC0]" style={{ width: `${pct}%` }} /></div>
+                        </div>
+                      );
+                    })()}
                     <button onClick={() => startExtending(w)} className="mt-2 text-[10px] font-bold text-[#8B6BC0] hover:text-[#F2ECDD]">Extend contract</button>
                   </div>
                 ))}
@@ -5237,7 +5290,7 @@ export default function BookedRingsideEmpire() {
                     <div className="text-[10px] text-[#8B8593]">
                       Founded Y{yearOf(feederCompany.foundedWeek)} Wk{weekOfYear(feederCompany.foundedWeek)} &middot; Roster: {feederRosterSize} &middot; Shows run: {feederShows.length} &middot; Avg. rating: {avgRating}
                     </div>
-                    <div className="text-[9px] text-[#8B8593] italic mt-1">Built from shows booked at the Developmental level — manage it from Book &middot; Show Level and Roster &middot; Developmental.</div>
+                    <div className="text-[9px] text-[#8B8593] italic mt-1">Built from shows booked at the Developmental level — manage it from Book &middot; Show Level and Roster &middot; Developmental. Anyone assigned there trains toward their potential every week, faster if you actually book them — check their Roster card for progress.</div>
                   </div>
                 </div>
               );
