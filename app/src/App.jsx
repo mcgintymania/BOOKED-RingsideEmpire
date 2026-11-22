@@ -205,8 +205,23 @@ function segmentLabel(index, total) {
   if (frac >= 0.4) return "Lower Card";
   return "Opener";
 }
+// Three flavors of angle, same no-win/no-energy-cost shape as the original
+// single "promo" format but each exercising a different stat and telling a
+// different kind of story: a Promo is solo mic work (charisma), a
+// Confrontation puts two people face to face and can boil over into a
+// physical swerve, and a Vignette is solo atmosphere-building (entertainment
+// stat instead of charisma) — a way for someone light on mic skill but
+// strong on presentation to still contribute to a storyline.
+const ANGLE_TYPES = [
+  { key: "promo", label: "Promo", desc: "Solo mic work — rated on charisma, no win/loss. Aim it at a signed wrestler to nudge or spark a rivalry, or leave it general." },
+  { key: "confrontation", label: "Confrontation", desc: "Two people face to face — rated on both performers' charisma, and carries a real chance of boiling over into a physical swerve. A bigger rivalry swing than a plain promo." },
+  { key: "vignette", label: "Vignette", desc: "Solo atmosphere-building — rated on entertainment instead of charisma, no subject. A way for a strong-presentation, weak-mic performer to still pull weight on an angle." },
+];
 function isSegmentComplete(seg) {
-  if (seg.format === "segment") return !!seg.team1[0];
+  if (seg.format === "segment") {
+    if (seg.angleType === "confrontation") return !!seg.team1[0] && !!seg.team2?.[0];
+    return !!seg.team1[0];
+  }
   if (seg.type === "triple") return seg.team1.filter(Boolean).length >= 3;
   if (seg.type === "fatal4") return seg.team1.filter(Boolean).length >= 4;
   return seg.team1.filter(Boolean).length > 0 && seg.team2.filter(Boolean).length > 0;
@@ -221,12 +236,24 @@ let nextSegmentId = 1;
 function makeSegment(format) {
   return {
     id: nextSegmentId++,
-    format, type: "singles",
+    format, type: "singles", angleType: "promo",
     team1: [null, null, null, null], team2: [null, null],
     titleId: null, specialtyId: null,
     minutes: SEGMENT_DEFAULT_MINUTES,
     result: null,
   };
+}
+// Shared across every result display (card builder, show results, Results
+// tab history) so the flavor text can only drift out of sync with the
+// mechanics in one place, not three.
+function angleResultText(m) {
+  if (m.angleType === "confrontation") {
+    return `${m.performer.name} and ${m.subject.name} go face to face${m.brawl ? " — and it turns physical!" : "."}`;
+  }
+  if (m.angleType === "vignette") {
+    return `${m.performer.name} delivers a vignette.`;
+  }
+  return `${m.performer.name} cuts a promo${m.subject ? ` aimed at ${m.subject.name}` : ""}.`;
 }
 
 // Dark matches: an optional, unrated 1v1 before or after the card proper —
@@ -2402,12 +2429,21 @@ export default function BookedRingsideEmpire() {
     const cap = computeSegmentCap(index, total, seg.minutes);
     const label = segmentLabel(index, total);
     if (seg.format === "segment") {
+      const angleType = seg.angleType || "promo";
       const performer = seg.team1[0];
       const subject = seg.team2 && seg.team2[0] ? seg.team2[0] : null;
-      const chaFloor = Math.round(performer.cha * 0.4);
-      const rawRating = Math.max(chaFloor, Math.min(cap, chaFloor + Math.round(Math.random() * (cap - chaFloor))));
-      const rating = Math.min(cap, rawRating + staffRatingBonus);
-      return { slotKey: seg.id, slotLabel: label, format: "segment", performer, subject, rating, titleInfo: null };
+      const statBasis = angleType === "vignette" ? performer.ent
+        : angleType === "confrontation" && subject ? (performer.cha + subject.cha) / 2
+        : performer.cha;
+      const floor = Math.round(statBasis * 0.4);
+      const rawRating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * (cap - floor))));
+      // A face-to-face confrontation has a real chance of boiling over into
+      // a physical swerve — pops the rating a bit, same spirit as a promo
+      // genuinely going off-script, at a small energy cost (see the weekly
+      // tick) instead of a promo's usual energy recovery.
+      const brawl = angleType === "confrontation" && !!subject && Math.random() < 0.25;
+      const rating = Math.min(100, Math.min(cap, rawRating + staffRatingBonus) + (brawl ? 6 : 0));
+      return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, titleInfo: null };
     }
     if (seg.type === "triple" || seg.type === "fatal4") {
       const participants = seg.team1.filter(Boolean);
@@ -2537,7 +2573,13 @@ export default function BookedRingsideEmpire() {
   const addSegment = (format) => setSegments((prev) => [...prev, makeSegment(format)]);
   const removeSegment = (id) => setSegments((prev) => prev.filter((s) => s.id !== id));
   const setSegmentFormat = (id, format) => {
-    updateSegment(id, (s) => ({ ...s, format, team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null }));
+    updateSegment(id, (s) => ({ ...s, format, angleType: "promo", team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null }));
+  };
+  const setSegmentAngleType = (id, angleType) => {
+    // Vignette has no subject — drop one if it was set switching away from
+    // Promo/Confrontation. Confrontation needs a subject, but leaves it
+    // for the player to pick rather than guessing one.
+    updateSegment(id, (s) => ({ ...s, angleType, team2: angleType === "vignette" ? [null] : s.team2 }));
   };
   const setSegmentType = (id, type) => {
     updateSegment(id, (s) => {
@@ -2665,7 +2707,7 @@ export default function BookedRingsideEmpire() {
       // a dark-match-only freelancer still needs paying to show up and work.
       const payroll = roster.reduce((sum, w) => sum + weeklyWage(w), 0);
       const freelancersUsed = new Set([
-        ...matches.flatMap((m) => (m.format === "segment" ? [m.performer] : [...m.team1, ...m.team2])).filter((w) => w.contractedTo === null).map((w) => w.name),
+        ...matches.flatMap((m) => (m.format === "segment" ? [m.performer, ...(m.subject ? [m.subject] : [])] : [...m.team1, ...m.team2])).filter((w) => w.contractedTo === null).map((w) => w.name),
         ...darkMatchResults.flatMap((d) => [d.a, d.b]).filter((w) => w.contractedTo === null).map((w) => w.name),
       ]);
       const freelanceCost = pool.filter((w) => freelancersUsed.has(w.name)).reduce((sum, w) => sum + (w.perUseFee ?? baseFreelanceFee(w)), 0);
@@ -2906,6 +2948,8 @@ export default function BookedRingsideEmpire() {
 
       // A promo aimed at someone: smaller effect than an actual match, and no
       // physical cost — nudges an existing feud, or can spark a brand new one.
+      // A Confrontation swings the same storyline harder — two people actually
+      // stood face to face — and harder still if it boiled over into a brawl.
       const segmentNewsEntries = [];
       const segmentStoryUpdates = {};
       const segmentNewRivalNames = []; // [performerName, subjectName] pairs to add to each other's rivals
@@ -2913,14 +2957,21 @@ export default function BookedRingsideEmpire() {
         if (m.format !== "segment" || !m.subject) return;
         const key = [m.performer.name, m.subject.name].sort().join("|");
         const alreadyRivals = m.performer.rivals.includes(m.subject.name) && m.subject.rivals.includes(m.performer.name);
+        const isConfrontation = m.angleType === "confrontation";
+        const intensityGain = isConfrontation ? (m.brawl ? 18 : 10) : 5;
+        const startIntensity = isConfrontation ? 25 : 15;
         if (alreadyRivals) {
           const existing = storylines[key] || { intensity: 20, matchesFought: 0 };
-          segmentStoryUpdates[key] = { intensity: clamp(existing.intensity + 5, 0, 100), matchesFought: existing.matchesFought };
-          segmentNewsEntries.push(`${m.performer.name} calls out ${m.subject.name} on the mic, keeping the rivalry hot.`);
+          segmentStoryUpdates[key] = { intensity: clamp(existing.intensity + intensityGain, 0, 100), matchesFought: existing.matchesFought };
+          segmentNewsEntries.push(isConfrontation
+            ? `${m.performer.name} and ${m.subject.name} go face to face${m.brawl ? " and it turns physical" : ""}, keeping the rivalry hot.`
+            : `${m.performer.name} calls out ${m.subject.name} on the mic, keeping the rivalry hot.`);
         } else {
           segmentNewRivalNames.push([m.performer.name, m.subject.name]);
-          segmentStoryUpdates[key] = { intensity: 15, matchesFought: 0 };
-          segmentNewsEntries.push(`${m.performer.name} calls out ${m.subject.name}, sparking a new rivalry.`);
+          segmentStoryUpdates[key] = { intensity: startIntensity, matchesFought: 0 };
+          segmentNewsEntries.push(isConfrontation
+            ? `${m.performer.name} and ${m.subject.name} come face to face${m.brawl ? " and it turns physical" : ""}, sparking a new rivalry.`
+            : `${m.performer.name} calls out ${m.subject.name}, sparking a new rivalry.`);
         }
       });
       if (Object.keys(segmentStoryUpdates).length > 0) setStorylines((s) => ({ ...s, ...segmentStoryUpdates }));
@@ -3252,9 +3303,20 @@ export default function BookedRingsideEmpire() {
         setUniverseFeed((feed) => [{ id: `debut-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${d.name} has made their debut, entering the wrestling scene as a free agent.`, type: "rumor" }, ...feed].slice(0, 300));
       }
 
-      // Segment performers get a small permanent charisma bump reflecting improved mic skills.
+      // Segment performers get a small permanent bump to whichever stat the
+      // angle actually exercised — charisma for a Promo/Confrontation,
+      // entertainment for a Vignette. A Confrontation's subject gets a
+      // smaller charisma bump too — they're an active participant, not just
+      // a name getting called out.
       const segmentBumps = {};
-      matches.forEach((m) => { if (m.format === "segment") segmentBumps[m.performer.name] = Math.max(1, Math.round(m.rating / 30)); });
+      matches.forEach((m) => {
+        if (m.format !== "segment") return;
+        const statKey = m.angleType === "vignette" ? "ent" : "cha";
+        segmentBumps[m.performer.name] = { statKey, amount: Math.max(1, Math.round(m.rating / 30)) };
+        if (m.angleType === "confrontation" && m.subject) {
+          segmentBumps[m.subject.name] = { statKey: "cha", amount: Math.max(1, Math.round(m.rating / 40)) };
+        }
+      });
 
       // Dark match reps give each participant a small chance of a tiny
       // permanent bump to a random performance stat — picking up pointers
@@ -3386,7 +3448,7 @@ export default function BookedRingsideEmpire() {
           if (withTitle.contractedTo && withTitle.contractExpiresWeek !== null && withTitle.contractExpiresWeek <= weekNumber) {
             withTitle = { ...withTitle, contractedTo: null, contractExpiresWeek: null };
           }
-          if (segmentBumps[w.name]) withTitle = { ...withTitle, cha: clamp(withTitle.cha + segmentBumps[w.name], 0, 100) };
+          if (segmentBumps[w.name]) withTitle = { ...withTitle, [segmentBumps[w.name].statKey]: clamp(withTitle[segmentBumps[w.name].statKey] + segmentBumps[w.name].amount, 0, 100) };
           if (darkMatchBumps[w.name]) withTitle = { ...withTitle, [darkMatchBumps[w.name]]: clamp(withTitle[darkMatchBumps[w.name]] + 1, 0, 100) };
           const evt = rosterEventUpdates[w.name];
           if (evt) {
@@ -3456,7 +3518,12 @@ export default function BookedRingsideEmpire() {
               justInjured = true;
             }
           } else if (segmentObj) {
-            eng = clamp(eng + rand(ENERGY_CHANGE_SEGMENT[0], ENERGY_CHANGE_SEGMENT[1]), 0, 100);
+            // A Confrontation that boiled over into a brawl costs energy like
+            // a light physical encounter instead of the usual segment
+            // recovery — it stopped being just talking.
+            eng = segmentObj.brawl
+              ? clamp(eng - Math.round(rand(ENERGY_LOSS_MATCH[0], ENERGY_LOSS_MATCH[1]) * 0.5), 0, 100)
+              : clamp(eng + rand(ENERGY_CHANGE_SEGMENT[0], ENERGY_CHANGE_SEGMENT[1]), 0, 100);
           } else if (darkMatchObj) {
             // Lighter than a real match — no live crowd carrying the pace,
             // no cameras raising the stakes. Half the energy cost, half the
@@ -3753,7 +3820,7 @@ export default function BookedRingsideEmpire() {
     showHistory: showHistory.slice(0, 20).map((r) => ({
       ...r,
       matches: r.matches.map((m) => {
-        if (m.format === "segment") return { ...m, performer: { name: m.performer.name } };
+        if (m.format === "segment") return { ...m, performer: { name: m.performer.name }, subject: m.subject ? { name: m.subject.name } : null };
         const t1 = m.team1.map((w) => ({ name: w.name }));
         const t2 = m.team2.map((w) => ({ name: w.name }));
         const winnerTeam = m.winnerTeam === m.team1 ? t1 : t2;
@@ -6029,7 +6096,7 @@ export default function BookedRingsideEmpire() {
                       <div className="flex items-center justify-between flex-wrap gap-1">
                         <span className="text-[10px] text-[#8B8593] font-bold tracking-wide">
                           <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-[#5B3B8C] text-[#F2ECDD] text-[9px] font-black mr-1.5 align-middle">{segIndex + 1}</span>
-                          {slot.format === "segment" ? "ANGLE" : "MATCH"} &middot; {label.toUpperCase()} <span className="text-[#8B6BC0]">(cap {cap})</span>
+                          {slot.format === "segment" ? `ANGLE · ${(ANGLE_TYPES.find((at) => at.key === (slot.angleType || "promo")) || ANGLE_TYPES[0]).label.toUpperCase()}` : "MATCH"} &middot; {label.toUpperCase()} <span className="text-[#8B6BC0]">(cap {cap})</span>
                         </span>
                         <div className="flex items-center gap-1">
                           <button onClick={() => setSegmentMinutes(slot.id, slot.minutes - 1)} className="w-5 h-5 flex items-center justify-center rounded border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]">−</button>
@@ -6049,6 +6116,11 @@ export default function BookedRingsideEmpire() {
                             {t === "singles" ? "1v1" : t === "tag" ? "2v2" : t === "triple" ? "Triple Threat" : "Fatal 4-Way"}
                           </button>
                         ))}
+                        {slot.format === "segment" && ANGLE_TYPES.map((at) => (
+                          <button key={at.key} onClick={() => setSegmentAngleType(slot.id, at.key)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(slot.angleType || "promo") === at.key ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={(slot.angleType || "promo") === at.key ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
+                            {at.label}
+                          </button>
+                        ))}
                       </div>
 
                       {slot.format === "segment" ? (
@@ -6059,14 +6131,17 @@ export default function BookedRingsideEmpire() {
                               <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[0]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
                             ))}
                           </select>
-                          {slot.team1[0] && <div className="text-[9px] text-[#8B8593] mt-1">ATTR {Math.round(attrOf(slot.team1[0]))} &middot; CHA {slot.team1[0].cha}/100 &middot; {effectiveTier(slot.team1[0])} &middot; <span className={slot.team1[0].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team1[0].alignment}</span> &middot; STA {slot.team1[0].eng}/100</div>}
-                          <select value={slot.team2?.[0]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team2", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mt-1.5">
-                            <option value="">No subject — general promo</option>
-                            {bookable.filter((w) => w.name !== slot.team1[0]?.name).map((w) => (
-                              <option key={w.name} value={w.name}>{wrestlerOptionLabel(w)}{w.rivals.includes(slot.team1[0]?.name) ? " (existing rival)" : ""}</option>
-                            ))}
-                          </select>
-                          <div className="text-[9px] text-[#8B8593] italic mt-1">Promo segment — rated on charisma, no win/loss, boosts their CHA slightly. Aim it at a signed wrestler to nudge or spark a rivalry, without any energy cost.</div>
+                          {slot.team1[0] && <div className="text-[9px] text-[#8B8593] mt-1">ATTR {Math.round(attrOf(slot.team1[0]))} &middot; {slot.angleType === "vignette" ? `ENT ${slot.team1[0].ent}/100` : `CHA ${slot.team1[0].cha}/100`} &middot; {effectiveTier(slot.team1[0])} &middot; <span className={slot.team1[0].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team1[0].alignment}</span> &middot; STA {slot.team1[0].eng}/100</div>}
+                          {slot.angleType !== "vignette" && (
+                            <select value={slot.team2?.[0]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team2", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mt-1.5">
+                              <option value="">{slot.angleType === "confrontation" ? "Select who they face off with..." : "No subject — general promo"}</option>
+                              {bookable.filter((w) => w.name !== slot.team1[0]?.name).map((w) => (
+                                <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team2?.[0]?.name !== w.name}>{wrestlerOptionLabel(w)}{w.rivals.includes(slot.team1[0]?.name) ? " (existing rival)" : ""}</option>
+                              ))}
+                            </select>
+                          )}
+                          {slot.angleType === "confrontation" && slot.team2?.[0] && <div className="text-[9px] text-[#8B8593] mt-1">ATTR {Math.round(attrOf(slot.team2[0]))} &middot; CHA {slot.team2[0].cha}/100 &middot; {effectiveTier(slot.team2[0])} &middot; <span className={slot.team2[0].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team2[0].alignment}</span></div>}
+                          <div className="text-[9px] text-[#8B8593] italic mt-1">{ANGLE_TYPES.find((at) => at.key === (slot.angleType || "promo"))?.desc} No win/loss, no energy cost either way{slot.angleType === "confrontation" ? " unless it turns physical." : "."}</div>
                         </div>
                       ) : (slot.type === "triple" || slot.type === "fatal4") ? (
                         <>
@@ -6205,7 +6280,7 @@ export default function BookedRingsideEmpire() {
                           <div className="text-[9px] text-[#8B8593] mb-1 flex items-center gap-1"><Check size={11} className="text-[#8B6BC0]" /> RESOLVED {slot.result.specialty ? `· ${slot.result.specialty.name.toUpperCase()}` : ""}{slot.result.winMethod ? ` · VIA ${slot.result.winMethod.toUpperCase()}` : ""}</div>
                           {slot.result.format === "segment" ? (
                             <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-[#F2ECDD]">{slot.result.performer.name} cuts a promo{slot.result.subject ? <span className="font-normal text-[#8B8593]"> aimed at {slot.result.subject.name}</span> : ""}</span>
+                              <span className="text-xs font-bold text-[#F2ECDD]">{angleResultText(slot.result)}</span>
                               <div className="flex items-center gap-1.5 text-[10px] text-[#8B8593]"><Star size={11} className="text-[#8B6BC0]" /> {slot.result.rating}</div>
                             </div>
                           ) : slot.result.isMultiMan ? (
@@ -6352,7 +6427,7 @@ export default function BookedRingsideEmpire() {
                   <div className="text-[9px] text-[#8B8593] mb-1">{m.slotLabel}{m.format === "segment" ? " · SEGMENT" : ""}{m.specialty ? ` · ${m.specialty.name.toUpperCase()}` : ""}{(m.storyKey || m.stableStoryKey) ? " · RIVALRY" : ""}{m.winMethod ? ` · VIA ${m.winMethod.toUpperCase()}` : ""}</div>
                   {m.format === "segment" ? (
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-[#F2ECDD]">{m.performer.name} cuts a promo{m.subject ? <span className="font-normal text-[#8B8593]"> aimed at {m.subject.name}</span> : ""}</span>
+                      <span className="text-xs font-bold text-[#F2ECDD]">{angleResultText(m)}</span>
                       <div className="flex items-center gap-1.5 text-[10px] text-[#8B8593]"><Star size={11} className="text-[#8B6BC0]" /> {m.rating}</div>
                     </div>
                   ) : m.isMultiMan ? (
@@ -6460,7 +6535,7 @@ export default function BookedRingsideEmpire() {
                           <div key={i}>
                             {m.format === "segment" ? (
                               <div className="flex items-center justify-between text-xs">
-                                <span><span className="text-[9px] text-[#8B8593] mr-1">{m.slotLabel}:</span>{m.performer.name} cuts a promo{m.subject ? ` aimed at ${m.subject.name}` : ""}</span>
+                                <span><span className="text-[9px] text-[#8B8593] mr-1">{m.slotLabel}:</span>{angleResultText(m)}</span>
                                 <div className="flex items-center gap-1 text-[10px] text-[#8B8593]"><Star size={10} className="text-[#8B6BC0]" />{m.rating}</div>
                               </div>
                             ) : m.isMultiMan ? (
