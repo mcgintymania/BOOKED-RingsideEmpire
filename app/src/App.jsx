@@ -3,7 +3,8 @@ import {
   Zap, Wind, HeartPulse, Mic2, Shield, TrendingUp, RotateCcw,
   Wallet, Users, Ticket, Building2, Star, X, Plus, Trophy, UserPlus, Award, BarChart3, Newspaper,
   Calendar, ChevronDown, ListChecks, Landmark, Pencil, Globe2, Check, Sparkles, BatteryCharging,
-  ArrowUpCircle, Swords, Layers, LineChart as LineChartIcon, NotebookPen, Lock, Tv, Flame, Skull, Users2, BookOpen, Menu, Flag
+  ArrowUpCircle, Swords, Layers, LineChart as LineChartIcon, NotebookPen, Lock, Tv, Flame, Skull, Users2, BookOpen, Menu, Flag,
+  Wrench, Upload, Download, Trash2
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -289,6 +290,60 @@ const BOOKER_FIRST = ["Morgan", "Casey", "Reese", "Jordan", "Avery", "Devon", "Q
 const BOOKER_LAST = ["Whitfield", "Doyle", "Blackburn", "Sharpe", "Callahan", "Mercer", "Ashby", "Konig"];
 function randomBookerName() {
   return `${BOOKER_FIRST[rand(0, BOOKER_FIRST.length - 1)]} ${BOOKER_LAST[rand(0, BOOKER_LAST.length - 1)]}`;
+}
+
+// World Editor — lightweight CSV in/out, no external library. Handles quoted
+// fields (commas, quotes, newlines inside a value) well enough for simple
+// name/stat spreadsheets; not a general-purpose CSV parser.
+function csvEscape(val) {
+  const s = String(val ?? "");
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function toCSV(rows, headers) {
+  const lines = [headers.join(",")];
+  rows.forEach((r) => lines.push(headers.map((h) => csvEscape(r[h])).join(",")));
+  return lines.join("\r\n");
+}
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; }
+      } else field += c;
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field); field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some((f) => f !== "")) rows.push(row);
+      row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field !== "" || row.length > 0) { row.push(field); if (row.some((f) => f !== "")) rows.push(row); }
+  return rows;
+}
+function downloadTextFile(filename, text, mimeType) {
+  const blob = new Blob([text], { type: mimeType || "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+const WRESTLER_CSV_HEADERS = ["name", "age", "sex", "weightClass", "alignment", "overall"];
+const COMPANY_CSV_HEADERS = ["name", "bookerName", "titleName", "popularity", "funds"];
+function slugifyCompanyId(name, existingIds) {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "company";
+  let id = base, n = 2;
+  while (existingIds.includes(id)) { id = `${base}-${n}`; n++; }
+  return id;
 }
 
 // Fictional TV networks — placeholder names until you send a real list. Pay is
@@ -1346,6 +1401,7 @@ const SIDEBAR_SECTIONS = [
       { key: "promotions", label: "Promotions", icon: Globe2 },
       { key: "rankings", label: "Rankings", icon: TrendingUp },
       { key: "wrestlers", label: "Wrestlers", icon: UserPlus },
+      { key: "worldeditor", label: "World Editor", icon: Wrench },
     ],
   },
   {
@@ -1434,6 +1490,14 @@ export default function BookedRingsideEmpire() {
   const [guideOpenSections, setGuideOpenSections] = useState(() => new Set(["gettingstarted"]));
   const [rosterSubTab, setRosterSubTab] = useState("roster");
   const [wrestlersSubTab, setWrestlersSubTab] = useState("list");
+
+  // World Editor — direct editing of wrestlers/companies, plus CSV bulk import.
+  const [worldEditorSubTab, setWorldEditorSubTab] = useState("wrestlers");
+  const [editorWrestlerSearch, setEditorWrestlerSearch] = useState("");
+  const [editingWrestlerDraft, setEditingWrestlerDraft] = useState(null); // a full editable copy of a pool wrestler, or a fresh blank one
+  const [editingCompanyDraft, setEditingCompanyDraft] = useState(null); // same idea for a rivalCompanies entry
+  const [wrestlerImportSummary, setWrestlerImportSummary] = useState(null); // { added, skipped: [{row, reason}] }
+  const [companyImportSummary, setCompanyImportSummary] = useState(null);
   const [bookSubTab, setBookSubTab] = useState("book");
   const [resultsYearFilter, setResultsYearFilter] = useState("all");
   const [resultsCompanyFilter, setResultsCompanyFilter] = useState("player");
@@ -1707,6 +1771,156 @@ export default function BookedRingsideEmpire() {
     setFeederCompany({ name: newFeederName.trim(), foundedWeek: weekNumber });
     setUniverseFeed((feed) => [{ id: `feeder-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has founded ${newFeederName.trim()} as a developmental feeder promotion. Shows booked at the Developmental level now build its reputation.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
     setNewFeederName("");
+  };
+
+  // World Editor — direct create/edit/delete for wrestlers and companies, plus
+  // CSV bulk import/export. Sandbox tools: no cost, no confirmation dialogs
+  // beyond the delete buttons themselves, since this is meant for building out
+  // a roster/world rather than playing through consequences.
+  const openNewWrestlerDraft = () => {
+    const w = makeWrestlerFromOverall("New Wrestler", 50);
+    setEditingWrestlerDraft({ ...w, _isNew: true, _originalName: null });
+  };
+  const openEditWrestlerDraft = (w) => setEditingWrestlerDraft({ ...w, _isNew: false, _originalName: w.name });
+  const deleteWrestlerByName = (name) => {
+    setPool((p) => p.filter((w) => w.name !== name));
+    setPerUseRoster((pu) => pu.filter((n) => n !== name));
+    setTitles((ts) => ts.map((t) => (t.holders.includes(name) ? { ...t, holders: t.holders.filter((h) => h !== name) } : t)));
+    setRivalTitles((ts) => ts.map((t) => (t.holder === name ? { ...t, holder: null } : t)));
+  };
+  const saveWrestlerDraft = () => {
+    const d = editingWrestlerDraft;
+    if (!d || !d.name.trim()) return;
+    const name = d.name.trim();
+    const nameTaken = pool.some((w) => w.name === name && name !== d._originalName);
+    if (nameTaken) return;
+    const clamped = { ...d };
+    STAT_KEYS.forEach((k) => { clamped[k] = clamp(Math.round(Number(clamped[k]) || 0), 0, 100); });
+    clamped.age = clamp(Math.round(Number(clamped.age) || 25), 16, 90);
+    clamped.name = name;
+    clamped.tier = tierFromAvg(avgStats(clamped));
+    delete clamped._isNew; delete clamped._originalName;
+    if (d._isNew) {
+      setPool((p) => [...p, clamped]);
+    } else {
+      setPool((p) => p.map((w) => (w.name === d._originalName ? { ...w, ...clamped } : w)));
+      if (d._originalName !== name) {
+        // Keep every reference to the old name pointing at the renamed wrestler.
+        setPerUseRoster((pu) => pu.map((n) => (n === d._originalName ? name : n)));
+        setTitles((ts) => ts.map((t) => ({ ...t, holders: t.holders.map((h) => (h === d._originalName ? name : h)) })));
+        setRivalTitles((ts) => ts.map((t) => (t.holder === d._originalName ? { ...t, holder: name } : t)));
+      }
+    }
+    setEditingWrestlerDraft(null);
+  };
+
+  const openNewCompanyDraft = () => setEditingCompanyDraft({ id: null, name: "", bookerName: randomBookerName(), titleName: "", popularity: 10, funds: 25000, _isNew: true });
+  const openEditCompanyDraft = (co) => setEditingCompanyDraft({ ...co, _isNew: false });
+  const deleteCompanyById = (id) => {
+    setRivalCompanies((cs) => cs.filter((c) => c.id !== id));
+    setRivalTitles((ts) => ts.filter((t) => t.companyId !== id));
+    setWorkingAgreements((ids) => ids.filter((wid) => wid !== id));
+    setPool((p) => p.map((w) => (w.contractedTo === id ? { ...w, contractedTo: null, contractExpiresWeek: null } : w)));
+  };
+  const saveCompanyDraft = () => {
+    const d = editingCompanyDraft;
+    if (!d || !d.name.trim()) return;
+    const popularity = clamp(Math.round(Number(d.popularity) || 0), 0, 100);
+    const funds = Math.max(0, Math.round(Number(d.funds) || 0));
+    const titleName = d.titleName.trim() || `${d.name.trim()} Championship`;
+    if (d._isNew) {
+      const id = slugifyCompanyId(d.name.trim(), rivalCompanies.map((c) => c.id));
+      setRivalCompanies((cs) => [...cs, { id, name: d.name.trim(), bookerName: d.bookerName.trim() || randomBookerName(), titleName, popularity, funds, showsRun: 0, lastTier: popularityTier(popularity), acquired: false }]);
+      setRivalTitles((ts) => [...ts, { id: `${id}-title`, name: titleName, companyId: id, holder: null, reignStartWeek: null, totalDefenses: 0 }]);
+    } else {
+      setRivalCompanies((cs) => cs.map((c) => (c.id === d.id ? { ...c, name: d.name.trim(), bookerName: d.bookerName.trim() || c.bookerName, titleName, popularity, funds } : c)));
+      setRivalTitles((ts) => ts.map((t) => (t.companyId === d.id ? { ...t, name: titleName } : t)));
+    }
+    setEditingCompanyDraft(null);
+  };
+
+  const downloadWrestlerTemplate = () => downloadTextFile("booked-wrestler-template.csv", toCSV([
+    { name: "Johnny Thunder", age: 27, sex: "Male", weightClass: "Heavyweight", alignment: "Face", overall: 65 },
+    { name: "The Viper", age: 31, sex: "Male", weightClass: "Cruiserweight", alignment: "Heel", overall: 58 },
+  ], WRESTLER_CSV_HEADERS));
+  const downloadWrestlerExport = () => downloadTextFile("booked-wrestlers-export.csv", toCSV(
+    pool.map((w) => ({ name: w.name, age: w.age, sex: w.sex, weightClass: w.weightClass, alignment: w.alignment, overall: Math.round(avgStats(w)) })),
+    WRESTLER_CSV_HEADERS
+  ));
+  const handleWrestlerCSVUpload = (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rows = parseCSV(String(reader.result));
+      if (rows.length < 2) { setWrestlerImportSummary({ added: 0, skipped: [{ row: 0, reason: "File is empty or has no data rows." }] }); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const idx = (key) => header.indexOf(key);
+      const nameIdx = idx("name");
+      if (nameIdx === -1) { setWrestlerImportSummary({ added: 0, skipped: [{ row: 0, reason: 'No "name" column found.' }] }); return; }
+      const existingNames = new Set(pool.map((w) => w.name));
+      const added = [];
+      const skipped = [];
+      rows.slice(1).forEach((r, i) => {
+        const name = (r[nameIdx] || "").trim();
+        if (!name) { skipped.push({ row: i + 2, reason: "Missing name." }); return; }
+        if (existingNames.has(name) || added.some((w) => w.name === name)) { skipped.push({ row: i + 2, reason: `"${name}" already exists.` }); return; }
+        const age = clamp(Math.round(Number(r[idx("age")]) || 25), 16, 90);
+        const sexRaw = (r[idx("sex")] || "").trim();
+        const sex = /^f/i.test(sexRaw) ? "Female" : "Male";
+        const weightClass = WEIGHT_CLASSES.includes((r[idx("weightclass")] || "").trim()) ? r[idx("weightclass")].trim() : WEIGHT_CLASSES[rand(0, WEIGHT_CLASSES.length - 1)];
+        const alignment = ALIGNMENTS.includes((r[idx("alignment")] || "").trim()) ? r[idx("alignment")].trim() : ALIGNMENTS[rand(0, ALIGNMENTS.length - 1)];
+        const overall = clamp(Math.round(Number(r[idx("overall")]) || 50), 1, 100);
+        added.push(makeWrestlerFromOverall(name, overall, { age, sex, weightClass, alignment }));
+      });
+      if (added.length > 0) setPool((p) => [...p, ...added]);
+      setWrestlerImportSummary({ added: added.length, skipped });
+    };
+    reader.readAsText(file);
+  };
+
+  const downloadCompanyTemplate = () => downloadTextFile("booked-company-template.csv", toCSV([
+    { name: "Thunderdome Wrestling", bookerName: "Alex Rivera", titleName: "Thunderdome Championship", popularity: 25, funds: 100000 },
+  ], COMPANY_CSV_HEADERS));
+  const downloadCompanyExport = () => downloadTextFile("booked-companies-export.csv", toCSV(
+    rivalCompanies.map((c) => ({ name: c.name, bookerName: c.bookerName, titleName: c.titleName, popularity: Math.round(c.popularity), funds: Math.round(c.funds) })),
+    COMPANY_CSV_HEADERS
+  ));
+  const handleCompanyCSVUpload = (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rows = parseCSV(String(reader.result));
+      if (rows.length < 2) { setCompanyImportSummary({ added: 0, skipped: [{ row: 0, reason: "File is empty or has no data rows." }] }); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const idx = (key) => header.indexOf(key);
+      const nameIdx = idx("name");
+      if (nameIdx === -1) { setCompanyImportSummary({ added: 0, skipped: [{ row: 0, reason: 'No "name" column found.' }] }); return; }
+      const existingIds = rivalCompanies.map((c) => c.id);
+      const addedCompanies = [];
+      const addedTitles = [];
+      const skipped = [];
+      rows.slice(1).forEach((r, i) => {
+        const name = (r[nameIdx] || "").trim();
+        if (!name) { skipped.push({ row: i + 2, reason: "Missing name." }); return; }
+        const popularity = clamp(Math.round(Number(r[idx("popularity")]) || 10), 0, 100);
+        const funds = Math.max(0, Math.round(Number(r[idx("funds")]) || 25000));
+        const bookerName = (r[idx("bookername")] || "").trim() || randomBookerName();
+        const titleName = (r[idx("titlename")] || "").trim() || `${name} Championship`;
+        const id = slugifyCompanyId(name, [...existingIds, ...addedCompanies.map((c) => c.id)]);
+        addedCompanies.push({ id, name, bookerName, titleName, popularity, funds, showsRun: 0, lastTier: popularityTier(popularity), acquired: false });
+        addedTitles.push({ id: `${id}-title`, name: titleName, companyId: id, holder: null, reignStartWeek: null, totalDefenses: 0 });
+      });
+      if (addedCompanies.length > 0) {
+        setRivalCompanies((cs) => [...cs, ...addedCompanies]);
+        setRivalTitles((ts) => [...ts, ...addedTitles]);
+      }
+      setCompanyImportSummary({ added: addedCompanies.length, skipped });
+    };
+    reader.readAsText(file);
   };
 
   const startNegotiating = (w) => {
@@ -4381,6 +4595,106 @@ export default function BookedRingsideEmpire() {
           </div>
         )}
 
+        {editingWrestlerDraft && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setEditingWrestlerDraft(null)}>
+            <div className="booked-modal-card border rounded-lg p-5 max-w-md w-full max-h-[90vh] overflow-y-auto" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
+              <div className="text-lg font-black mb-3" style={{ fontFamily: "Anton, sans-serif" }}>{editingWrestlerDraft._isNew ? "NEW WRESTLER" : "EDIT WRESTLER"}</div>
+              <div className="space-y-3">
+                <div>
+                  <div className="text-[9px] text-[#8B8593] mb-1">NAME</div>
+                  <input value={editingWrestlerDraft.name} onChange={(e) => setEditingWrestlerDraft((d) => ({ ...d, name: e.target.value }))} className="w-full border border-[#2B2733] rounded px-3 py-2 text-sm" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <div className="text-[9px] text-[#8B8593] mb-1">AGE</div>
+                    <input type="number" value={editingWrestlerDraft.age} onChange={(e) => setEditingWrestlerDraft((d) => ({ ...d, age: e.target.value }))} className="w-full border border-[#2B2733] rounded px-2 py-1.5 text-xs" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                  </div>
+                  <div>
+                    <div className="text-[9px] text-[#8B8593] mb-1">SEX</div>
+                    <select value={editingWrestlerDraft.sex} onChange={(e) => setEditingWrestlerDraft((d) => ({ ...d, sex: e.target.value }))} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="text-[9px] text-[#8B8593] mb-1">ALIGNMENT</div>
+                    <select value={editingWrestlerDraft.alignment} onChange={(e) => setEditingWrestlerDraft((d) => ({ ...d, alignment: e.target.value }))} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                      {ALIGNMENTS.map((a) => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[9px] text-[#8B8593] mb-1">WEIGHT CLASS</div>
+                  <select value={editingWrestlerDraft.weightClass} onChange={(e) => setEditingWrestlerDraft((d) => ({ ...d, weightClass: e.target.value }))} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                    {WEIGHT_CLASSES.map((wc) => <option key={wc} value={wc}>{wc}</option>)}
+                  </select>
+                </div>
+                <div className="pt-2 border-t border-[#2B2733]">
+                  <div className="text-[9px] tracking-widest text-[#8B8593] font-bold mb-2">STATS (0&ndash;100) &middot; OVR {Math.round(avgStats(editingWrestlerDraft))}</div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                    {STAT_KEYS.map((k) => (
+                      <div key={k}>
+                        <div className="flex justify-between text-[9px] text-[#8B8593] mb-0.5"><span>{STAT_LABELS[k]}</span><span className="font-bold text-[#F2ECDD]">{editingWrestlerDraft[k]}</span></div>
+                        <input type="range" min={0} max={100} value={editingWrestlerDraft[k]} onChange={(e) => setEditingWrestlerDraft((d) => ({ ...d, [k]: Number(e.target.value) }))} className="w-full accent-[#8B6BC0]" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button onClick={saveWrestlerDraft} disabled={!editingWrestlerDraft.name.trim()} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
+                  {editingWrestlerDraft._isNew ? "Create" : "Save Changes"}
+                </button>
+                {!editingWrestlerDraft._isNew && (
+                  <button onClick={() => { deleteWrestlerByName(editingWrestlerDraft._originalName); setEditingWrestlerDraft(null); }} className="px-3 py-2 border border-red-900 text-red-300 hover:bg-red-950 rounded"><Trash2 size={14} /></button>
+                )}
+                <button onClick={() => setEditingWrestlerDraft(null)} className="px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {editingCompanyDraft && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setEditingCompanyDraft(null)}>
+            <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
+              <div className="text-lg font-black mb-3" style={{ fontFamily: "Anton, sans-serif" }}>{editingCompanyDraft._isNew ? "NEW COMPANY" : "EDIT COMPANY"}</div>
+              <div className="space-y-3">
+                <div>
+                  <div className="text-[9px] text-[#8B8593] mb-1">COMPANY NAME</div>
+                  <input value={editingCompanyDraft.name} onChange={(e) => setEditingCompanyDraft((d) => ({ ...d, name: e.target.value }))} className="w-full border border-[#2B2733] rounded px-3 py-2 text-sm" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                </div>
+                <div>
+                  <div className="text-[9px] text-[#8B8593] mb-1">BOOKER NAME</div>
+                  <input value={editingCompanyDraft.bookerName} onChange={(e) => setEditingCompanyDraft((d) => ({ ...d, bookerName: e.target.value }))} className="w-full border border-[#2B2733] rounded px-3 py-2 text-sm" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                </div>
+                <div>
+                  <div className="text-[9px] text-[#8B8593] mb-1">TITLE NAME</div>
+                  <input value={editingCompanyDraft.titleName} onChange={(e) => setEditingCompanyDraft((d) => ({ ...d, titleName: e.target.value }))} placeholder={`${editingCompanyDraft.name || "Company"} Championship`} className="w-full border border-[#2B2733] rounded px-3 py-2 text-sm" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-[9px] text-[#8B8593] mb-1">POPULARITY (0&ndash;100)</div>
+                    <input type="number" value={editingCompanyDraft.popularity} onChange={(e) => setEditingCompanyDraft((d) => ({ ...d, popularity: e.target.value }))} className="w-full border border-[#2B2733] rounded px-2 py-1.5 text-xs" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                  </div>
+                  <div>
+                    <div className="text-[9px] text-[#8B8593] mb-1">FUNDS (£)</div>
+                    <input type="number" value={editingCompanyDraft.funds} onChange={(e) => setEditingCompanyDraft((d) => ({ ...d, funds: e.target.value }))} className="w-full border border-[#2B2733] rounded px-2 py-1.5 text-xs" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button onClick={saveCompanyDraft} disabled={!editingCompanyDraft.name.trim()} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
+                  {editingCompanyDraft._isNew ? "Create" : "Save Changes"}
+                </button>
+                {!editingCompanyDraft._isNew && (
+                  <button onClick={() => { deleteCompanyById(editingCompanyDraft.id); setEditingCompanyDraft(null); }} className="px-3 py-2 border border-red-900 text-red-300 hover:bg-red-950 rounded"><Trash2 size={14} /></button>
+                )}
+                <button onClick={() => setEditingCompanyDraft(null)} className="px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === "storylines" && (
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">STORYLINES</div>
@@ -5691,6 +6005,105 @@ export default function BookedRingsideEmpire() {
           </div>
         )}
 
+        {tab === "worldeditor" && (
+          <div>
+            <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">WORLD EDITOR</div>
+            <div className="text-[10px] text-[#8B8593] mb-4">Create, edit, or delete wrestlers and companies directly — or bulk-import a whole roster from a CSV template (opens and edits fine in Excel or Google Sheets).</div>
+            <div className="flex gap-2 mb-4">
+              <SubTabButton active={worldEditorSubTab === "wrestlers"} onClick={() => setWorldEditorSubTab("wrestlers")} icon={UserPlus} label="Wrestlers" />
+              <SubTabButton active={worldEditorSubTab === "companies"} onClick={() => setWorldEditorSubTab("companies")} icon={Globe2} label="Companies" />
+            </div>
+
+            {worldEditorSubTab === "wrestlers" && (
+              <div>
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
+                  <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-2">BULK IMPORT / EXPORT</div>
+                  <div className="text-[10px] text-[#8B8593] mb-3">Download the template, fill in one row per wrestler (name is required — everything else has a sensible default), then upload it back. Names already in your world are skipped.</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={downloadWrestlerTemplate} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"><Download size={13} /> Download Template</button>
+                    <button onClick={downloadWrestlerExport} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"><Download size={13} /> Export Current Roster</button>
+                    <label className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#241B33] cursor-pointer">
+                      <Upload size={13} /> Upload CSV
+                      <input type="file" accept=".csv" className="hidden" onChange={handleWrestlerCSVUpload} />
+                    </label>
+                  </div>
+                  {wrestlerImportSummary && (
+                    <div className="mt-3 text-[11px]">
+                      <div className="text-[#8B6BC0] font-bold">{wrestlerImportSummary.added} wrestler{wrestlerImportSummary.added === 1 ? "" : "s"} added.</div>
+                      {wrestlerImportSummary.skipped.length > 0 && (
+                        <div className="text-[#8B8593] mt-1">
+                          {wrestlerImportSummary.skipped.length} skipped:
+                          <div className="space-y-0.5 mt-0.5">
+                            {wrestlerImportSummary.skipped.slice(0, 10).map((s, i) => <div key={i}>Row {s.row}: {s.reason}</div>)}
+                          </div>
+                        </div>
+                      )}
+                      <button onClick={() => setWrestlerImportSummary(null)} className="text-[#8B8593] hover:text-[#F2ECDD] mt-1">Dismiss</button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 mb-3">
+                  <input value={editorWrestlerSearch} onChange={(e) => setEditorWrestlerSearch(e.target.value)} placeholder="Search by name..." className="flex-1 bg-[#131117] border border-[#2B2733] rounded px-3 py-2 text-xs" />
+                  <button onClick={openNewWrestlerDraft} className="flex items-center gap-1.5 px-3 py-2 rounded text-xs font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#17151C] whitespace-nowrap"><Plus size={13} /> Add Wrestler</button>
+                </div>
+                <div className="text-[10px] text-[#8B8593] mb-2">{pool.length} total in the world</div>
+                <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
+                  {pool.filter((w) => w.name.toLowerCase().includes(editorWrestlerSearch.toLowerCase())).slice(0, 150).map((w) => (
+                    <button key={w.name} onClick={() => openEditWrestlerDraft(w)} className="text-left bg-[#17151C] border border-[#2B2733] hover:border-[#5B3B8C] rounded-lg p-2.5">
+                      <div className="font-bold text-xs truncate">{w.name}</div>
+                      <div className="text-[9px] text-[#8B8593]">OVR {Math.round(avgStats(w))} &middot; {w.age} &middot; {w.sex} &middot; {w.alignment}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {worldEditorSubTab === "companies" && (
+              <div>
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
+                  <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-2">BULK IMPORT / EXPORT</div>
+                  <div className="text-[10px] text-[#8B8593] mb-3">Same idea — one row per company. A title and booker name are generated automatically if left blank.</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={downloadCompanyTemplate} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"><Download size={13} /> Download Template</button>
+                    <button onClick={downloadCompanyExport} className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"><Download size={13} /> Export Current Companies</button>
+                    <label className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#241B33] cursor-pointer">
+                      <Upload size={13} /> Upload CSV
+                      <input type="file" accept=".csv" className="hidden" onChange={handleCompanyCSVUpload} />
+                    </label>
+                  </div>
+                  {companyImportSummary && (
+                    <div className="mt-3 text-[11px]">
+                      <div className="text-[#8B6BC0] font-bold">{companyImportSummary.added} compan{companyImportSummary.added === 1 ? "y" : "ies"} added.</div>
+                      {companyImportSummary.skipped.length > 0 && (
+                        <div className="text-[#8B8593] mt-1">
+                          {companyImportSummary.skipped.length} skipped:
+                          <div className="space-y-0.5 mt-0.5">
+                            {companyImportSummary.skipped.slice(0, 10).map((s, i) => <div key={i}>Row {s.row}: {s.reason}</div>)}
+                          </div>
+                        </div>
+                      )}
+                      <button onClick={() => setCompanyImportSummary(null)} className="text-[#8B8593] hover:text-[#F2ECDD] mt-1">Dismiss</button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end mb-3">
+                  <button onClick={openNewCompanyDraft} className="flex items-center gap-1.5 px-3 py-2 rounded text-xs font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#17151C] whitespace-nowrap"><Plus size={13} /> Add Company</button>
+                </div>
+                <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
+                  {rivalCompanies.map((co) => (
+                    <button key={co.id} onClick={() => openEditCompanyDraft(co)} className="text-left bg-[#17151C] border border-[#2B2733] hover:border-[#5B3B8C] rounded-lg p-2.5">
+                      <div className="font-bold text-xs truncate">{co.name}{co.acquired && <span className="text-[#8B6BC0]"> (yours)</span>}</div>
+                      <div className="text-[9px] text-[#8B8593]">{popularityTier(co.popularity)} ({Math.round(co.popularity)}) &middot; {co.bookerName}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {tab === "titles" && (
           <div className="flex flex-col dt:flex-row gap-5">
           <div className="flex-1 min-w-0 space-y-3">
@@ -6129,6 +6542,7 @@ export default function BookedRingsideEmpire() {
                 { key: "storylines", label: "Storylines", desc: `${Object.keys(storylines).length + Object.keys(stableStorylines).length} active`, icon: Flame },
                 { key: "calendar", label: "Calendar", desc: `${scheduledEvents.length} event${scheduledEvents.length === 1 ? "" : "s"} scheduled`, icon: Calendar },
                 { key: "wrestlers", label: "Wrestlers", desc: "Browse & hire the full pool", icon: UserPlus },
+                { key: "worldeditor", label: "World Editor", desc: "Edit or bulk-import wrestlers & companies", icon: Wrench },
                 { key: "promotions", label: "Promotions", desc: "Rival companies", icon: Globe2 },
                 { key: "deals", label: "Deals", desc: "TV networks & sponsors", icon: Tv },
                 { key: "merch", label: "Merchandise", desc: popularity >= MERCH_UNLOCK_POPULARITY ? `${merchStock} units in stock` : "Locked", icon: Ticket },
