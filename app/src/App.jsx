@@ -3276,60 +3276,61 @@ export default function BookedRingsideEmpire() {
           const retiringNames = new Set(retiringWrestlers.map((r) => r.name));
           next = next.filter((w) => !retiringNames.has(w.name));
         }
-        // Posted from inside this updater, not after calling setPool, since
-        // a functional setState update isn't guaranteed to run synchronously
-        // at the call site — this is the only point where developmentBreakoutNames
-        // is reliably populated when this code actually executes.
+        // Everything below is posted from inside this updater, not after
+        // calling setPool, since a functional setState update isn't
+        // guaranteed to run synchronously at the call site — these
+        // collector arrays (injuryNewsEntries, newlyInjuredNames,
+        // retiringWrestlers, developmentBreakoutNames) are only reliably
+        // populated once this updater actually runs.
+        if (injuryNewsEntries.length > 0) {
+          setUniverseFeed((feed) => [...injuryNewsEntries.map((e, i) => ({ id: `inj-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "injury", companyId: e.companyId })), ...feed].slice(0, 300));
+        }
+        if (newlyInjuredNames.length > 0) {
+          // Check the titles themselves directly by holder name — simpler and more
+          // reliable than tracking it through the per-wrestler pool pass. Handles
+          // tag titles correctly too: either partner being hurt vacates the pair.
+          const vacatedPlayerTitles = titles.filter((t) => t.holders.some((h) => newlyInjuredNames.includes(h)));
+          if (vacatedPlayerTitles.length > 0) {
+            setTitles((ts) => ts.map((t) => {
+              if (!vacatedPlayerTitles.some((v) => v.id === t.id)) return t;
+              return {
+                ...t, holders: [], reignStartWeek: null, currentReignDefenses: 0,
+                history: [...t.history, { holderNames: t.holders, reignWeeks: t.reignStartWeek !== null ? weekNumber - t.reignStartWeek : 0, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByInjury: true }],
+              };
+            }));
+            next = next.map((w) => (vacatedPlayerTitles.some((t) => t.holders.includes(w.name)) ? { ...w, holdsTitles: w.holdsTitles.filter((id) => !vacatedPlayerTitles.some((t) => t.id === id)) } : w));
+            setUniverseFeed((feed) => [...vacatedPlayerTitles.map((t, i) => ({ id: `vac-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${t.holders.join(" & ")} forced to vacate the ${t.name} due to injury.`, type: "injury", companyId: "player" })), ...feed].slice(0, 300));
+          }
+          const vacatedRivalTitles = rivalTitles.filter((t) => t.holder && newlyInjuredNames.includes(t.holder));
+          if (vacatedRivalTitles.length > 0) {
+            setRivalTitles((ts) => ts.map((t) => (vacatedRivalTitles.some((v) => v.id === t.id) ? { ...t, holder: null } : t)));
+            setUniverseFeed((feed) => [...vacatedRivalTitles.map((t, i) => ({ id: `rvac-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `The ${t.name} has been vacated due to injury.`, type: "injury", companyId: t.companyId })), ...feed].slice(0, 300));
+          }
+        }
+        if (retiringWrestlers.length > 0) {
+          const retiringNames = retiringWrestlers.map((r) => r.name);
+          const vacatedPlayerTitlesForRetirement = titles.filter((t) => t.holders.some((h) => retiringNames.includes(h)));
+          if (vacatedPlayerTitlesForRetirement.length > 0) {
+            setTitles((ts) => ts.map((t) => {
+              if (!vacatedPlayerTitlesForRetirement.some((v) => v.id === t.id)) return t;
+              return {
+                ...t, holders: [], reignStartWeek: null, currentReignDefenses: 0,
+                history: [...t.history, { holderNames: t.holders, reignWeeks: t.reignStartWeek !== null ? weekNumber - t.reignStartWeek : 0, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByRetirement: true }],
+              };
+            }));
+          }
+          const vacatedRivalTitlesForRetirement = rivalTitles.filter((t) => t.holder && retiringNames.includes(t.holder));
+          if (vacatedRivalTitlesForRetirement.length > 0) {
+            setRivalTitles((ts) => ts.map((t) => (vacatedRivalTitlesForRetirement.some((v) => v.id === t.id) ? { ...t, holder: null } : t)));
+          }
+          setPerUseRoster((pu) => pu.filter((n) => !retiringNames.includes(n)));
+          setUniverseFeed((feed) => [...retiringWrestlers.map((r, i) => ({ id: `ret-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${r.name} has announced their retirement from professional wrestling.${r.holdsTitles.length > 0 ? " Their title(s) have been vacated." : ""}`, type: "rumor", companyId: r.contractedTo })), ...feed].slice(0, 300));
+        }
         if (developmentBreakoutNames.length > 0) {
           setUniverseFeed((feed) => [...developmentBreakoutNames.map((name, i) => ({ id: `dev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${name} has developed into a legitimate prospect — they've outgrown what Developmental can teach them and are ready for the main roster.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
         }
         return next;
       });
-      if (injuryNewsEntries.length > 0) {
-        setUniverseFeed((feed) => [...injuryNewsEntries.map((e, i) => ({ id: `inj-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "injury", companyId: e.companyId })), ...feed].slice(0, 300));
-      }
-      if (newlyInjuredNames.length > 0) {
-        // Check the titles themselves directly by holder name — simpler and more
-        // reliable than tracking it through the per-wrestler pool pass. Handles
-        // tag titles correctly too: either partner being hurt vacates the pair.
-        const vacatedPlayerTitles = titles.filter((t) => t.holders.some((h) => newlyInjuredNames.includes(h)));
-        if (vacatedPlayerTitles.length > 0) {
-          setTitles((ts) => ts.map((t) => {
-            if (!vacatedPlayerTitles.some((v) => v.id === t.id)) return t;
-            return {
-              ...t, holders: [], reignStartWeek: null, currentReignDefenses: 0,
-              history: [...t.history, { holderNames: t.holders, reignWeeks: t.reignStartWeek !== null ? weekNumber - t.reignStartWeek : 0, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByInjury: true }],
-            };
-          }));
-          setPool((p) => p.map((w) => (vacatedPlayerTitles.some((t) => t.holders.includes(w.name)) ? { ...w, holdsTitles: w.holdsTitles.filter((id) => !vacatedPlayerTitles.some((t) => t.id === id)) } : w)));
-          setUniverseFeed((feed) => [...vacatedPlayerTitles.map((t, i) => ({ id: `vac-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${t.holders.join(" & ")} forced to vacate the ${t.name} due to injury.`, type: "injury", companyId: "player" })), ...feed].slice(0, 300));
-        }
-        const vacatedRivalTitles = rivalTitles.filter((t) => t.holder && newlyInjuredNames.includes(t.holder));
-        if (vacatedRivalTitles.length > 0) {
-          setRivalTitles((ts) => ts.map((t) => (vacatedRivalTitles.some((v) => v.id === t.id) ? { ...t, holder: null } : t)));
-          setUniverseFeed((feed) => [...vacatedRivalTitles.map((t, i) => ({ id: `rvac-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `The ${t.name} has been vacated due to injury.`, type: "injury", companyId: t.companyId })), ...feed].slice(0, 300));
-        }
-      }
-
-      if (retiringWrestlers.length > 0) {
-        const retiringNames = retiringWrestlers.map((r) => r.name);
-        const vacatedPlayerTitlesForRetirement = titles.filter((t) => t.holders.some((h) => retiringNames.includes(h)));
-        if (vacatedPlayerTitlesForRetirement.length > 0) {
-          setTitles((ts) => ts.map((t) => {
-            if (!vacatedPlayerTitlesForRetirement.some((v) => v.id === t.id)) return t;
-            return {
-              ...t, holders: [], reignStartWeek: null, currentReignDefenses: 0,
-              history: [...t.history, { holderNames: t.holders, reignWeeks: t.reignStartWeek !== null ? weekNumber - t.reignStartWeek : 0, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByRetirement: true }],
-            };
-          }));
-        }
-        const vacatedRivalTitlesForRetirement = rivalTitles.filter((t) => t.holder && retiringNames.includes(t.holder));
-        if (vacatedRivalTitlesForRetirement.length > 0) {
-          setRivalTitles((ts) => ts.map((t) => (vacatedRivalTitlesForRetirement.some((v) => v.id === t.id) ? { ...t, holder: null } : t)));
-        }
-        setPerUseRoster((pu) => pu.filter((n) => !retiringNames.includes(n)));
-        setUniverseFeed((feed) => [...retiringWrestlers.map((r, i) => ({ id: `ret-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${r.name} has announced their retirement from professional wrestling.${r.holdsTitles.length > 0 ? " Their title(s) have been vacated." : ""}`, type: "rumor", companyId: r.contractedTo })), ...feed].slice(0, 300));
-      }
 
       const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
       if (record) setShowHistory((h) => [record, ...h].slice(0, 60));
