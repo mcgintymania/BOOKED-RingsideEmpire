@@ -1562,16 +1562,25 @@ const GUIDE_SECTIONS = [
     ],
   },
   {
+    key: "staff", title: "Staff", icon: HardHat,
+    body: [
+      "Staff (Menu) covers seven behind-the-scenes roles, each hired straight from a standing candidate pool — no bidding against yourself, just pick a candidate and offer a contract. Agent, Referee, and Assistant Booker all raise the ceiling your matches can realistically hit; Medical Staff cuts injury odds and shortens recovery; Ring Crew reduces the odds of a general company catastrophe (lawsuits, tax audits, scandals); Security does the same for crowd and venue incidents specifically (fights, barrier jumps, backstage breaches); Trainer speeds up how fast Developmental prospects close the gap to their potential. Only your single best hire per role counts — a second Agent doesn't stack with the first.",
+      "Rivals aren't just sitting there — every non-acquired rival company competes for the exact same candidate pool, hiring and occasionally losing staff of their own over time. Anyone a rival's already snapped up shows up greyed out in your Candidates list rather than just vanishing, so you can see the competition for talent happening.",
+    ],
+  },
+  {
     key: "booking", title: "Booking a Show", icon: Building2,
     body: [
       "Level, venue, city, length, and cadence are all set up once on Calendar · Show Events — Book just shows what's due that week and lets you set the ticket price, build the card, and run it. Higher prices mean fewer fans, and your reputation in that specific city sets the ceiling.",
       "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks. Touring abroad (New York, Mexico City, Tokyo) is gated separately, behind reaching National company tier — a venue is also locked by company tier on top of that (Backyard is always open, Major Arena needs Global).",
       "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
-      "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, Fatal 4-Way, or a Segment (a promo — rated on charisma, no winner or energy cost, and you can aim it at another signed wrestler to nudge or spark a rivalry).",
+      "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, or Fatal 4-Way — plus three kinds of Angle, none of which have a winner/loser or cost energy: a Promo (solo mic work, rated on charisma, aim it at someone to nudge or spark a rivalry), a Confrontation (two people face to face, rated on both their charisma, with a real chance of boiling over into a physical swerve — a much bigger rivalry swing than a plain promo), or a Vignette (solo atmosphere-building rated on entertainment instead of charisma, no subject).",
       "Every match resolves with a method — Pinfall, Submission, Disqualification, or Countout — weighted by the winning side's stats.",
       "Booking the exact same matchup over and over gets a real, escalating rating penalty as fans get tired of seeing it — shown as a warning before you run the show. An active rivalry gets that penalty halved, since building toward a blowoff is a real reason to run it back.",
       "Speciality Matches (No DQ, Cage, Ladder, and more) are gated by your company level and cost extra, but boost the rating ceiling and let a wrestler's Specialty-type stat swing the outcome, not just their overall rating.",
       "A Face vs Heel matchup gets a small rating bump for the contrast — booking two of the same alignment against each other is a flatter match.",
+      "Pre-show and post-show dark matches (up to 3 each, also on the Book page) sit entirely outside the card — no time budget, no effect on the show rating, no wins/losses on anyone's record. They're just reps: a small chance of a permanent stat bump, and ring time that counts toward Developmental training for anyone not otherwise on the card.",
+      "Advertising (Book page, picked fresh for each scheduled show) spends money up front for a real boost to that show's attendance and how much it grows the city's popularity — Posters & Flyers, a TV Spot, or a Social Media Blitz, each pricier and stronger than the last.",
     ],
   },
   {
@@ -1611,6 +1620,7 @@ const GUIDE_SECTIONS = [
     key: "deals", title: "TV Networks & Sponsors", icon: Tv,
     body: [
       "Once you're reputable enough (nothing is available at Unknown), networks and sponsors will start making offers. A network deal pays per estimated viewer and also gives a small ongoing popularity boost; a sponsor is money only.",
+      "A bigger Production tier (Back Office) makes your broadcast itself worth more — it multiplies what a network actually pays per viewer, on top of whatever the raw viewer count already is.",
       "Offers refresh periodically when you don't have an active deal — check the Deals tab regularly.",
     ],
   },
