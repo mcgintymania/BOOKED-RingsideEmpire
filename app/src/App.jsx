@@ -272,6 +272,8 @@ function rollPerUseOffers(w) {
 const HIRE_REFUSAL_CHANCE = 0.2;
 const EXTENSION_REFUSAL_CHANCE = 0.25;
 const WEEKS_PER_YEAR = 52;
+const SCOUT_BASE_REFUSAL = 0.45;
+const SCOUT_CONTRACT_WEEKS = 52;
 
 const RIVAL_COMPANIES = [
   { id: "apex", name: "Apex Wrestling Federation", popularity: 88, titleName: "Apex World Championship", bookerName: "Vernon Macauley" },
@@ -1556,6 +1558,8 @@ export default function BookedRingsideEmpire() {
   const [hireWeeks, setHireWeeks] = useState(26);
   const [hireLevel, setHireLevel] = useState("main");
   const [hireResult, setHireResult] = useState(null);
+  const [scoutingTarget, setScoutingTarget] = useState(null);
+  const [scoutResult, setScoutResult] = useState(null);
   const [extendingTarget, setExtendingTarget] = useState(null);
   const [firingTarget, setFiringTarget] = useState(null);
   const [acquiringTarget, setAcquiringTarget] = useState(null);
@@ -1789,6 +1793,36 @@ export default function BookedRingsideEmpire() {
     setBank((b) => b - cost);
     if (cost > 0) setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - cost }]);
     setPool((p) => p.map((x) => (x.name === w.name ? { ...x, contractedTo: null, contractExpiresWeek: null } : x)));
+  };
+
+  // Scouting — poach a young or undersized prospect straight off a rival's
+  // roster into your Developmental system. Smaller and riskier than buying
+  // the whole company (acquireCompany): one wrestler, a real chance they
+  // turn you down, and the buyout cost is only paid if they say yes.
+  const isScoutProspect = (w) => w.age <= 24 || ["Jobber", "Lower Card"].includes(w.tier);
+  const scoutCost = (w) => Math.round(buyoutCost(w) * 1.5) + 2000;
+  const startScouting = (w) => { setScoutingTarget(w); setScoutResult(null); };
+  const confirmScout = () => {
+    if (!scoutingTarget || !feederCompany) return;
+    const cost = scoutCost(scoutingTarget);
+    if (bank < cost) return;
+    let chance = SCOUT_BASE_REFUSAL;
+    if (scoutingTarget.happiness < 40) chance -= 0.15; // unhappy where they are — easier sell
+    else if (scoutingTarget.happiness > 70) chance += 0.1; // content there — harder sell
+    chance = clamp(chance, 0.1, 0.85);
+    const refused = Math.random() < chance;
+    if (refused) {
+      const cooldownWeeks = rand(2, 4);
+      setPool((p) => p.map((w) => (w.name === scoutingTarget.name ? { ...w, hireCooldownUntil: weekNumber + cooldownWeeks } : w)));
+      setScoutResult("refused");
+      return;
+    }
+    const rivalName = RIVAL_COMPANIES.find((c) => c.id === scoutingTarget.contractedTo)?.name || "a rival promotion";
+    setBank((b) => b - cost);
+    setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - cost }]);
+    setPool((p) => p.map((w) => (w.name === scoutingTarget.name ? { ...w, contractedTo: "player", contractExpiresWeek: weekNumber + SCOUT_CONTRACT_WEEKS, rosterLevel: "developmental", hireCooldownUntil: null } : w)));
+    setUniverseFeed((feed) => [{ id: `scout-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has scouted ${scoutingTarget.name} away from ${rivalName} for their developmental system.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
+    setScoutResult("accepted");
   };
   // Show-level roster split — which card a signed wrestler is eligible for.
   // Defaults to "main" for anyone without one set (older saves included).
@@ -2610,24 +2644,29 @@ export default function BookedRingsideEmpire() {
         };
       });
       const vacatedByInactivity = [];
-      setTitles((ts) => ts.map((t) => {
-        if (titleUpdates[t.id]) return titleUpdates[t.id];
-        if (t.holders.length > 0) {
-          const lastActive = t.lastDefendedWeek ?? t.reignStartWeek;
-          if (lastActive !== null && weekNumber - lastActive >= TITLE_VACATE_WEEKS) {
-            vacatedByInactivity.push({ name: t.name, holders: t.holders });
-            return {
-              ...t, holders: [], reignStartWeek: null, lastDefendedWeek: null, currentReignDefenses: 0,
-              prestige: clamp((t.prestige || 0) - 8, 0, 100),
-              history: [...t.history, { holderNames: t.holders, reignWeeks: weekNumber - t.reignStartWeek, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByInactivity: true }],
-            };
+      setTitles((ts) => {
+        const nextTitles = ts.map((t) => {
+          if (titleUpdates[t.id]) return titleUpdates[t.id];
+          if (t.holders.length > 0) {
+            const lastActive = t.lastDefendedWeek ?? t.reignStartWeek;
+            if (lastActive !== null && weekNumber - lastActive >= TITLE_VACATE_WEEKS) {
+              vacatedByInactivity.push({ name: t.name, holders: t.holders });
+              return {
+                ...t, holders: [], reignStartWeek: null, lastDefendedWeek: null, currentReignDefenses: 0,
+                prestige: clamp((t.prestige || 0) - 8, 0, 100),
+                history: [...t.history, { holderNames: t.holders, reignWeeks: weekNumber - t.reignStartWeek, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByInactivity: true }],
+              };
+            }
           }
+          return t;
+        });
+        // Posted from inside this updater — read right after setTitles(),
+        // vacatedByInactivity is not guaranteed to be populated yet.
+        if (vacatedByInactivity.length > 0) {
+          setUniverseFeed((feed) => [...vacatedByInactivity.map((v, i) => ({ id: `vac-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `The ${v.name} has been vacated — ${v.holders.join(" & ")} went too long without defending it.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
         }
-        return t;
-      }));
-      if (vacatedByInactivity.length > 0) {
-        setUniverseFeed((feed) => [...vacatedByInactivity.map((v, i) => ({ id: `vac-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `The ${v.name} has been vacated — ${v.holders.join(" & ")} went too long without defending it.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
-      }
+        return nextTitles;
+      });
       if (titleNewsEntries.length > 0) {
         setUniverseFeed((feed) => [...titleNewsEntries.map((text, i) => ({ id: `t-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text, type: "title", companyId: "player" })), ...feed].slice(0, 300));
       }
@@ -2873,15 +2912,23 @@ export default function BookedRingsideEmpire() {
       if (Object.keys(rivalPoolUpdates).length > 0) setPool((p) => p.map((w) => (rivalPoolUpdates[w.name] ? { ...w, ...rivalPoolUpdates[w.name] } : w)));
       const rivalReignCandidates = [];
       if (Object.keys(rivalTitleUpdates).length > 0) {
-        setRivalTitles((ts) => ts.map((t) => {
-          if (!(t.id in rivalTitleUpdates)) return t;
-          const newHolder = rivalTitleUpdates[t.id];
-          if (newHolder === t.holder) return t; // retained, reign continues unbroken
-          if (t.holder && t.reignStartWeek !== null) {
-            rivalReignCandidates.push({ titleName: t.name, holderNames: [t.holder], weeks: weekNumber - t.reignStartWeek, companyName: RIVAL_COMPANIES.find((c) => c.id === t.companyId)?.name || t.name });
-          }
-          return { ...t, holder: newHolder, reignStartWeek: newHolder ? weekNumber : null };
-        }));
+        setRivalTitles((ts) => {
+          const nextRivalTitles = ts.map((t) => {
+            if (!(t.id in rivalTitleUpdates)) return t;
+            const newHolder = rivalTitleUpdates[t.id];
+            if (newHolder === t.holder) return t; // retained, reign continues unbroken
+            if (t.holder && t.reignStartWeek !== null) {
+              rivalReignCandidates.push({ titleName: t.name, holderNames: [t.holder], weeks: weekNumber - t.reignStartWeek, companyName: RIVAL_COMPANIES.find((c) => c.id === t.companyId)?.name || t.name });
+            }
+            return { ...t, holder: newHolder, reignStartWeek: newHolder ? weekNumber : null };
+          });
+          // Posted from inside this updater — read right after setRivalTitles(),
+          // rivalReignCandidates is not guaranteed to be populated yet.
+          rivalReignCandidates.forEach((rc) => {
+            setHallOfFame((h) => (rc.weeks > (h.longestReignRival?.weeks ?? -1) ? { ...h, longestReignRival: rc } : h));
+          });
+          return nextRivalTitles;
+        });
       }
       if (rivalNewsEntries.length > 0) {
         setUniverseFeed((feed) => [...rivalNewsEntries.map((e, i) => ({ id: `rv-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "rival", companyId: e.companyId })), ...feed].slice(0, 300));
@@ -2959,12 +3006,6 @@ export default function BookedRingsideEmpire() {
       if (newRivalShowRecords.length > 0) {
         setRivalShowHistory((h) => [...newRivalShowRecords, ...h].slice(0, 150));
       }
-
-      // Hall of Fame — best-ever seen from any rival company, tracked the same
-      // way as your own, so the page can show whether anyone's beaten you.
-      rivalReignCandidates.forEach((rc) => {
-        setHallOfFame((h) => (rc.weeks > (h.longestReignRival?.weeks ?? -1) ? { ...h, longestReignRival: rc } : h));
-      });
       if (newRivalShowRecords.length > 0) {
         const bestRivalMatch = newRivalShowRecords.flatMap((r) => r.matches.map((m) => ({ ...m, companyName: r.companyName, date: r.date }))).sort((a, b) => b.rating - a.rating)[0];
         if (bestRivalMatch) {
@@ -3007,11 +3048,13 @@ export default function BookedRingsideEmpire() {
             stillOpen.push(r);
           }
         });
+        // Posted from inside this updater — read right after setRequests(),
+        // brokenNewsEntries is not guaranteed to be populated yet.
+        if (brokenNewsEntries.length > 0) {
+          setUniverseFeed((feed) => [...brokenNewsEntries.map((text, i) => ({ id: `bp-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text, type: "injury", companyId: "player" })), ...feed].slice(0, 300));
+        }
         return stillOpen;
       });
-      if (brokenNewsEntries.length > 0) {
-        setUniverseFeed((feed) => [...brokenNewsEntries.map((text, i) => ({ id: `bp-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text, type: "injury", companyId: "player" })), ...feed].slice(0, 300));
-      }
       const brokenNames = new Set(); // filled below once we know which requests just broke
       // (re-derive from the pre-sweep list so we can dock happiness in the same pool pass)
       requests.forEach((r) => { if (r.status === "promised" && weekNumber > r.deadlineWeek) brokenNames.add(r.wrestlerName); });
@@ -5044,7 +5087,7 @@ export default function BookedRingsideEmpire() {
                 </button>
               </div>
             </div>
-            <div className="text-[10px] text-[#8B8593] mb-3">Add to Per-Use for a standing freelance pick, or sign Exclusive for a weekly-wage contract.</div>
+            <div className="text-[10px] text-[#8B8593] mb-3">Add to Per-Use for a standing freelance pick, or sign Exclusive for a weekly-wage contract. {feederCompany ? "Young or undersized talent signed to a rival can be Scouted straight into your Developmental system." : "Found a feeder promotion from Back Office to unlock Scouting rival prospects into Developmental."}</div>
             <input value={wrestlerSearch} onChange={(e) => setWrestlerSearch(e.target.value)} placeholder="Search wrestlers by name..." className="w-full border border-[#2B2733] rounded px-3 py-1.5 text-xs mb-3" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
 
             {showFilters && (
@@ -5137,11 +5180,15 @@ export default function BookedRingsideEmpire() {
                           )}
                         </div>
                       )}
+                      {rival && !onCooldown && feederCompany && isScoutProspect(w) && (
+                        <button onClick={() => startScouting(w)} className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded border border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#241B33] shrink-0" title="Poach this prospect into your Developmental system"><Plus size={11} /> Scout</button>
+                      )}
                       {onCooldown && <span className="text-[9px] text-[#8B8593] shrink-0">Cooldown {w.hireCooldownUntil - weekNumber}wk</span>}
                     </div>
                     <div className="text-[10px] font-semibold flex items-center gap-1 flex-wrap">
                       <span className="text-[#8B6BC0]">OVR {Math.round(attrOf(w))} &middot; {w.sex} &middot; {w.wins}-{w.losses}</span>{w.injuryWeeksRemaining && <span className="text-red-400 text-[9px]"> &middot; INJURED</span>}
                       {rival ? <span className="text-[9px] text-[#8B8593]">&middot; Signed: {rival.name}</span> : isPlayerSigned ? <span className="text-[9px] text-[#8B8593]">&middot; Exclusive to you</span> : isPerUse ? <span className="text-[9px] text-[#8B8593]">&middot; Per-use (yours)</span> : <span className="text-[9px] text-[#8B8593]">&middot; Freelance</span>}
+                      {rival && isScoutProspect(w) && <span className="text-[9px] text-[#8B6BC0] italic">&middot; Prospect</span>}
                     </div>
                   </div>
                 );
@@ -5188,6 +5235,25 @@ export default function BookedRingsideEmpire() {
                     </>
                   )}
                   <button onClick={() => setHiringTarget(null)} className="w-full mt-2 px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Close</button>
+                </div>
+              </div>
+            )}
+
+            {scoutingTarget && (
+              <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setScoutingTarget(null)}>
+                <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
+                  <div className="text-lg font-black mb-1" style={{ fontFamily: "Anton, sans-serif" }}>SCOUT {scoutingTarget.name.toUpperCase()}</div>
+                  <div className="text-[10px] text-[#8B8593] mb-3">
+                    Currently signed to {RIVAL_COMPANIES.find((c) => c.id === scoutingTarget.contractedTo)?.name || "a rival promotion"} — a {scoutingTarget.age}-year-old {scoutingTarget.tier.toLowerCase()} talent. Buying them out and signing them to your Developmental system costs £{scoutCost(scoutingTarget).toLocaleString()}, paid only if they say yes. They might say no — if so, they're off-limits for 2-4 weeks.
+                  </div>
+                  {scoutResult === "refused" && <div className="text-xs text-red-400 mb-3">{scoutingTarget.name} isn't interested in leaving right now. Try again in a few weeks.</div>}
+                  {scoutResult === "accepted" && <div className="text-xs text-[#8B6BC0] mb-3">Scouted! {scoutingTarget.name} joins your Developmental system.</div>}
+                  {!scoutResult && (
+                    <button onClick={confirmScout} disabled={bank < scoutCost(scoutingTarget)} className="w-full py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
+                      {bank < scoutCost(scoutingTarget) ? "Not enough funds" : `Make the move (£${scoutCost(scoutingTarget).toLocaleString()})`}
+                    </button>
+                  )}
+                  <button onClick={() => setScoutingTarget(null)} className="w-full mt-2 px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Close</button>
                 </div>
               </div>
             )}
