@@ -53,7 +53,7 @@ const TIER_ORDER = ["Jobber", "Lower Card", "Mid Card", "Upper Card", "Main Even
 // Exclusive signing only — a tiny promotion shouldn't be able to permanently
 // lock down a Legend-tier star. Per-use is unrestricted; renting a big name
 // for one night stays realistic regardless of your size.
-const HIRE_TIER_CAP = { Unknown: "Mid Card", Local: "Upper Card", Regional: "Main Event", National: "Legend", International: null };
+const HIRE_TIER_CAP = { Unknown: "Mid Card", Local: "Upper Card", Regional: "Main Event", National: "Legend", Global: null };
 // Merchandise unlocks once you're an established enough draw for a stall to
 // be worth running. Stock persists — buy it upfront, sell it show after show
 // until it runs out, and restock proactively or leave demand unmet.
@@ -77,7 +77,7 @@ const ACHIEVEMENTS = [
   { id: "local-tier", name: "Local Hero", desc: "Reach Local company level", icon: Landmark, check: (c) => TIER_RANK[c.tier] >= TIER_RANK.Local },
   { id: "regional-tier", name: "Regional Player", desc: "Reach Regional company level", icon: Landmark, check: (c) => TIER_RANK[c.tier] >= TIER_RANK.Regional },
   { id: "national-tier", name: "National Name", desc: "Reach National company level", icon: Landmark, check: (c) => TIER_RANK[c.tier] >= TIER_RANK.National },
-  { id: "international-tier", name: "Global Empire", desc: "Reach International company level", icon: Landmark, check: (c) => TIER_RANK[c.tier] >= TIER_RANK.International },
+  { id: "global-tier", name: "Global Empire", desc: "Reach Global company level", icon: Landmark, check: (c) => TIER_RANK[c.tier] >= TIER_RANK.Global },
   { id: "roster-50", name: "Solid Roster", desc: "Average 50+ Overall across your exclusive roster", icon: Users, check: (c) => c.avgRosterOverall >= 50 },
   { id: "roster-70", name: "Star-Studded", desc: "Average 70+ Overall across your exclusive roster", icon: Users, check: (c) => c.avgRosterOverall >= 70 },
   { id: "sign-10", name: "Building a Roster", desc: "Sign 10 wrestlers exclusively", icon: UserPlus, check: (c) => c.rosterCount >= 10 },
@@ -107,7 +107,7 @@ const ACHIEVEMENTS = [
   { id: "attendance-10k", name: "Packed House", desc: "Run a show with 10,000+ fans", icon: Ticket, check: (c) => c.maxAttendanceEver >= 10000 },
   { id: "sellout", name: "Sold Out", desc: "Sell out a show completely", icon: Ticket, check: (c) => c.hasSoldOutEver },
   { id: "show-90", name: "Match of the Year", desc: "Run a show rated 90 or higher", icon: Star, check: (c) => c.maxShowRatingEver >= 90 },
-  { id: "all-cities", name: "Grand Tour", desc: "Unlock every city region", icon: Globe2, check: (c) => c.unlockedCitiesCount >= CITY_CLUSTERS.flat().length },
+  { id: "all-cities", name: "Grand Tour", desc: "Unlock every city region, home and abroad", icon: Globe2, check: (c) => c.unlockedCitiesCount >= CITY_CLUSTERS.flat().length + FOREIGN_CITIES.length },
   { id: "first-merch-sale", name: "Merch Table", desc: "Sell your first piece of merchandise", icon: Ticket, check: (c) => c.totalMerchRevenue > 0 },
   { id: "merch-mogul", name: "Merch Mogul", desc: "Sell £50,000 of merchandise, all-time this promotion", icon: Ticket, check: (c) => c.totalMerchRevenue >= 50000 },
   { id: "merch-premium", name: "Premium Brand", desc: "Upgrade your merchandise quality", icon: Ticket, check: (c) => c.merchQualityTier > 0 },
@@ -117,13 +117,23 @@ const ACHIEVEMENTS = [
 // expected for your company level nudges your growth rate — a strong roster
 // for your size grows a bit faster, a weak one (relative to your size, not
 // zero) grows slower. Never a hard block, just a soft nudge either way.
-const EXPECTED_ROSTER_OVERALL = { Unknown: 20, Local: 35, Regional: 50, National: 65, International: 80 };
+const EXPECTED_ROSTER_OVERALL = { Unknown: 20, Local: 35, Regional: 50, National: 65, Global: 80 };
 const WEIGHT_CLASSES = ["Cruiserweight", "Light Heavyweight", "Heavyweight"];
 const DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const ALIGNMENTS = ["Face", "Heel"];
 
-const CITIES = ["Leeds", "Manchester", "Newcastle", "Cardiff", "London", "Glasgow", "Birmingham", "Liverpool", "Sheffield", "Edinburgh", "International"];
-const LOCKED_CITIES = { International: "International" }; // city name -> minimum company tier required to book there
+// Home nation: the UK cities your promotion grows through region by region.
+const CITIES = ["Leeds", "Manchester", "Newcastle", "Cardiff", "London", "Glasgow", "Birmingham", "Liverpool", "Sheffield", "Edinburgh", "New York", "Mexico City", "Tokyo"];
+// Touring abroad — three real wrestling territories, not a single vague
+// "International" catch-all. These sit outside the home-nation cluster
+// system entirely: they don't unlock from any UK city's local popularity,
+// only from your promotion's overall size (see FOREIGN_CITY_MIN_TIER) —
+// conquer your own country first, then go on tour. Each is also costlier
+// to actually run a show in (see the travel surcharge in runShow).
+const FOREIGN_CITIES = ["New York", "Mexico City", "Tokyo"];
+const FOREIGN_CITY_COUNTRY = { "New York": "USA", "Mexico City": "Mexico", "Tokyo": "Japan" };
+const FOREIGN_CITY_MIN_TIER = "National";
+const FOREIGN_TRAVEL_SURCHARGE_FRAC = 0.5; // extra fraction of venue cost, booking abroad
 // Progressive geography unlock — you choose your home city, and start there
 // only. Once any city you can already book reaches this much local
 // popularity, the next roughly-nearby cluster opens up. Keeps early
@@ -144,7 +154,7 @@ function buildCityTiers(startingCity) {
   const rest = CITY_CLUSTERS.filter((_, i) => i !== homeIdx);
   return [home, ...rest];
 }
-function computeUnlockedCities(cityPopularity, startingCity) {
+function computeUnlockedCities(cityPopularity, startingCity, tier) {
   const tiers = buildCityTiers(startingCity);
   let unlocked = [];
   for (let i = 0; i < tiers.length; i++) {
@@ -152,6 +162,7 @@ function computeUnlockedCities(cityPopularity, startingCity) {
     if (unlocked.some((c) => cityPopularity[c] >= CITY_UNLOCK_THRESHOLD)) unlocked = [...unlocked, ...tiers[i]];
     else break;
   }
+  if (TIER_RANK[tier] >= TIER_RANK[FOREIGN_CITY_MIN_TIER]) unlocked = [...unlocked, ...FOREIGN_CITIES];
   return unlocked;
 }
 
@@ -163,7 +174,7 @@ const ARENAS = [
   { name: "Small", crowdMin: 100, crowdMax: 500, ticketMin: 15, ticketMax: 35, cost: 750, minTier: "Local", showMinutes: 45 },
   { name: "Medium", crowdMin: 500, crowdMax: 2750, ticketMin: 30, ticketMax: 50, cost: 4000, minTier: "Regional", showMinutes: 60 },
   { name: "Large", crowdMin: 2750, crowdMax: 20000, ticketMin: 45, ticketMax: 65, cost: 12000, minTier: "National", showMinutes: 75 },
-  { name: "Major Arena", crowdMin: 15000, crowdMax: 32000, ticketMin: 60, ticketMax: 80, cost: 20000, minTier: "International", showMinutes: 90 },
+  { name: "Major Arena", crowdMin: 15000, crowdMax: 32000, ticketMin: 60, ticketMax: 80, cost: 20000, minTier: "Global", showMinutes: 90 },
 ];
 // Bounds for the player-editable show-length slider — a venue's own
 // showMinutes is just the default it suggests, not a hard cap.
@@ -330,7 +341,7 @@ const RIVAL_COMPANIES = [
   { id: "backlot", name: "Backlot Wrestling Collective", popularity: 3, titleName: "Backlot Championship", bookerName: "Kai Tamlin" },
 ];
 // Starting funds scale with reputation, roughly halving each rank down — the
-// #1 International promotion opens with £1m, the smallest with £25k.
+// #1 Global promotion opens with £1m, the smallest with £25k.
 const RIVAL_STARTING_FUNDS = [1000000, 600000, 400000, 250000, 150000, 90000, 50000, 25000];
 const BOOKER_FIRST = [
   "Morgan", "Casey", "Reese", "Jordan", "Avery", "Devon", "Quinn", "Harper",
@@ -1100,13 +1111,13 @@ function teamAttr(team) {
   return members.reduce((s, w) => s + attrOf(w), 0) / members.length;
 }
 function popularityTier(p) {
-  if (p >= 81) return "International";
+  if (p >= 81) return "Global";
   if (p >= 41) return "National";
   if (p >= 16) return "Regional";
   if (p >= 6) return "Local";
   return "Unknown";
 }
-const TIER_RANK = { Unknown: 0, Local: 1, Regional: 2, National: 3, International: 4 };
+const TIER_RANK = { Unknown: 0, Local: 1, Regional: 2, National: 3, Global: 4 };
 // Rival promotions don't have a visible Staff roster panel of their own —
 // listing names would be a lot of UI for something the player never directly
 // touches — but they DO actually compete for the same shared staff candidate
@@ -1134,14 +1145,14 @@ function rivalProductionLabel(bonusPoints) {
 // it automatically applies to any custom/imported company too (nothing to
 // fill in on upload). Feeds both their detail-page flavor and how many
 // matches they simulate on a given week (a longer show has more room).
-const RIVAL_SHOW_MINUTES = { Unknown: 30, Local: 45, Regional: 60, National: 90, International: 120 };
+const RIVAL_SHOW_MINUTES = { Unknown: 30, Local: 45, Regional: 60, National: 90, Global: 120 };
 function rivalShowMinutes(popularity) {
   return RIVAL_SHOW_MINUTES[popularityTier(popularity)];
 }
 // Founding a developmental feeder promotion is a real investment, not a free
 // toggle — building out a training facility and a second roster costs more
 // the bigger you already are.
-const FEEDER_SETUP_COSTS = { Unknown: 50000, Local: 75000, Regional: 125000, National: 250000, International: 500000 };
+const FEEDER_SETUP_COSTS = { Unknown: 50000, Local: 75000, Regional: 125000, National: 250000, Global: 500000 };
 
 // Speciality Matches — gated by company level, cost extra to book, and boost the
 // rating ceiling. Each type is driven by whichever stat fits it best, blended into
@@ -1156,8 +1167,8 @@ const SPECIALTY_MATCHES = [
   { id: "lastmanstanding", name: "Last Man Standing", minTier: "National", cost: 600, ratingBonus: 7, statKey: "eng" },
   { id: "ladder", name: "Ladder Match", minTier: "National", cost: 750, ratingBonus: 8, statKey: "jmp" },
   { id: "ironman", name: "Iron Man Match", minTier: "National", cost: 900, ratingBonus: 9, statKey: "eng" },
-  { id: "cage", name: "Cage Match", minTier: "International", cost: 1500, ratingBonus: 12, statKey: "atk" },
-  { id: "chamber", name: "Elimination Chamber", minTier: "International", cost: 2500, ratingBonus: 15, statKey: "spec" },
+  { id: "cage", name: "Cage Match", minTier: "Global", cost: 1500, ratingBonus: 12, statKey: "atk" },
+  { id: "chamber", name: "Elimination Chamber", minTier: "Global", cost: 2500, ratingBonus: 15, statKey: "spec" },
 ];
 const SPECIALTY_WEIGHT = 0.5; // how much of the win probability the driving stat controls, vs overall ATTR
 function specialtyUnlocked(type, popularity) {
@@ -1467,7 +1478,7 @@ function PopularityModal({ open, cityPopularity, cityVisits, popularity, onClose
             return (
               <div key={c}>
                 <div className="flex justify-between text-[11px] mb-1">
-                  <span className="font-semibold">{c}</span>
+                  <span className="font-semibold">{c}{FOREIGN_CITY_COUNTRY[c] ? <span className="text-[#8B8593] font-normal"> ({FOREIGN_CITY_COUNTRY[c]})</span> : ""}</span>
                   <span className="text-[#8B8593]">{p}</span>
                 </div>
                 <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
@@ -1487,7 +1498,7 @@ const GUIDE_SECTIONS = [
     key: "gettingstarted", title: "Getting Started", icon: Ticket,
     body: [
       "The basic loop: sign or shortlist wrestlers, book a show, run it, repeat. Every show advances one week.",
-      "You start small — an Unknown-tier promotion with £20,000 and no reputation, based in one city you choose yourself. Venues, loans, and everything else scale up as your company grows through Local, Regional, National, and finally International.",
+      "You start small — an Unknown-tier promotion with £20,000 and no reputation, based in one city you choose yourself. Venues, loans, and everything else scale up as your company grows through Local, Regional, National, and finally Global.",
       "There's no single win condition — this is a long-term management sim. The closest thing to a fail state is going bankrupt for 4 weeks straight, which gets you fired and ends that playthrough (it's archived under Menu > Saves > Previous Games, alongside any promotion you retire on your own terms).",
     ],
   },
@@ -1496,7 +1507,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Overview: your company name and booker name (read-only here — edit both under Menu > Back Office), plus key totals — funds, roster size, average roster ability, shows run, titles owned.",
       "Finance: a graph of your bank balance across the current in-game year, with a year selector once you've played long enough to have more than one, and your loan status right underneath it.",
-      "Company Level (shown top-right, tap it for a city breakdown) is your overall reputation — Unknown, Local, Regional, National, International. It's driven by how well your shows go in each city you actually tour, and it gets harder to keep climbing the higher it gets.",
+      "Company Level (shown top-right, tap it for a city breakdown) is your overall reputation — Unknown, Local, Regional, National, Global. It's driven by how well your shows go in each city you actually tour, and it gets harder to keep climbing the higher it gets.",
     ],
   },
   {
@@ -1514,8 +1525,8 @@ const GUIDE_SECTIONS = [
   {
     key: "booking", title: "Booking a Show", icon: Building2,
     body: [
-      "Pick a venue (locked by your company tier — Backyard is always open, Major Arena needs International), a city, and a ticket price. Higher prices mean fewer fans, and your reputation in that specific city sets the ceiling.",
-      "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks — International stays gated separately, behind company tier.",
+      "Level, venue, city, length, and cadence are all set up once on Calendar · Show Events — Book just shows what's due that week and lets you set the ticket price, build the card, and run it. Higher prices mean fewer fans, and your reputation in that specific city sets the ceiling.",
+      "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks. Touring abroad (New York, Mexico City, Tokyo) is gated separately, behind reaching National company tier — a venue is also locked by company tier on top of that (Backyard is always open, Major Arena needs Global).",
       "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
       "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, Fatal 4-Way, or a Segment (a promo — rated on charisma, no winner or energy cost, and you can aim it at another signed wrestler to nudge or spark a rivalry).",
       "Every match resolves with a method — Pinfall, Submission, Disqualification, or Countout — weighted by the winning side's stats.",
@@ -1797,7 +1808,7 @@ export default function BookedRingsideEmpire() {
   const [cityVisits, setCityVisits] = useState(() => Object.fromEntries(CITIES.map((c) => [c, 0])));
   const visitedCities = CITIES.filter((c) => cityVisits[c] > 0);
   // Touring reach: your overall score can't outgrow how many cities you've actually
-  // built a following in. One city alone caps out mid-Local; reaching International
+  // built a following in. One city alone caps out mid-Local; reaching Global
   // needs genuine touring, not just repeatedly hammering one home town.
   const cityDiversityCap = Math.min(100, 15 + (visitedCities.length - 1) * 14);
   const rawPopularity = visitedCities.length > 0 ? visitedCities.reduce((s, c) => s + cityPopularity[c], 0) / visitedCities.length : 0;
@@ -1911,7 +1922,7 @@ export default function BookedRingsideEmpire() {
       : roster.length < 5
       ? 1
       : clamp(0.7 + 0.3 * (avgRosterOverall / EXPECTED_ROSTER_OVERALL[popularityTier(popularity)]), 0.6, 1.15);
-  const unlockedCities = computeUnlockedCities(cityPopularity, startingCity);
+  const unlockedCities = computeUnlockedCities(cityPopularity, startingCity, popularityTier(popularity));
   const perUseWrestlers = pool.filter((w) => w.contractedTo === null && perUseRoster.includes(w.name));
   // Freelancers are open to either level — only the exclusive roster is split.
   const levelRoster = roster.filter((w) => (w.rosterLevel || "main") === showLevel);
@@ -2654,7 +2665,10 @@ export default function BookedRingsideEmpire() {
   );
   const projectedFreelanceCost = bookable.filter((w) => projectedFreelancerNames.has(w.name)).reduce((sum, w) => sum + (w.perUseFee ?? baseFreelanceFee(w)), 0);
   const projectedPayroll = roster.reduce((sum, w) => sum + weeklyWage(w), 0);
-  const projectedShowCost = arena.cost + projectedSpecialtyCost + projectedFreelanceCost;
+  // Touring abroad costs real money to actually get there — flights, freight,
+  // customs — on top of whatever the venue itself costs.
+  const travelSurcharge = FOREIGN_CITIES.includes(city) ? Math.round(arena.cost * FOREIGN_TRAVEL_SURCHARGE_FRAC) : 0;
+  const projectedShowCost = arena.cost + travelSurcharge + projectedSpecialtyCost + projectedFreelanceCost;
 
   const cityPop = city ? cityPopularity[city] : popularity;
   // Price always thins the crowd (multiplicative, so it matters at any popularity level),
@@ -2728,7 +2742,7 @@ export default function BookedRingsideEmpire() {
       const sponsorIncome = sponsorActive ? sponsorDeal.weeklyPay : 0;
 
       const loanPayment = loan ? loan.weeklyPayment : 0;
-      let profit = revenue - (showRan ? arena.cost : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll + news.amount + networkIncome + sponsorIncome;
+      let profit = revenue - (showRan ? arena.cost + travelSurcharge : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll + news.amount + networkIncome + sponsorIncome;
       const matchLikeRatings = matches.map((m) => m.rating);
       let fullRating = matchLikeRatings.length ? Math.round(matchLikeRatings.reduce((s, r) => s + r, 0) / matchLikeRatings.length) : 0;
 
@@ -3708,7 +3722,7 @@ export default function BookedRingsideEmpire() {
         return next;
       });
 
-      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
+      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, travelSurcharge, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
       if (record) setShowHistory((h) => [record, ...h].slice(0, 60));
       if (thisShowMatchupKeys.length > 0) {
         setRecentMatchups((prev) => [...thisShowMatchupKeys, ...prev].slice(0, 30));
@@ -3844,9 +3858,12 @@ export default function BookedRingsideEmpire() {
   const applySaveSnapshot = (s) => {
     setBank(s.bank ?? 20000); setWeekCount(s.weekCount ?? 1); setTotalShowsRun(s.totalShowsRun ?? 0); setTotalMatchesRun(s.totalMatchesRun ?? 0);
     setCompanyName(s.companyName || "Ringside Empire Wrestling"); setPlayerName(s.playerName || ""); setPlayerAge(s.playerAge || ""); setPlayerSex(s.playerSex || "");
-    setCityPopularity(s.cityPopularity || Object.fromEntries(CITIES.map((c) => [c, 0])));
+    // Merge over a full zeroed map, not just the saved object — an older
+    // save predating a since-added city (New York/Mexico City/Tokyo did not
+    // always exist) would otherwise leave that city's popularity undefined.
+    setCityPopularity({ ...Object.fromEntries(CITIES.map((c) => [c, 0])), ...(s.cityPopularity || {}) });
     setStartingCity(s.startingCity || null);
-    setCityVisits(s.cityVisits || Object.fromEntries(CITIES.map((c) => [c, 0])));
+    setCityVisits({ ...Object.fromEntries(CITIES.map((c) => [c, 0])), ...(s.cityVisits || {}) });
     setPool(s.pool || buildInitialPool());
     setRivalCompanies(s.rivalCompanies || RIVAL_COMPANIES.map((c, i) => ({ ...c, funds: RIVAL_STARTING_FUNDS[i] ?? 25000, showsRun: 0, lastTier: popularityTier(c.popularity) })));
     setRivalTitles(s.rivalTitles || RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: null })));
@@ -5979,7 +5996,7 @@ export default function BookedRingsideEmpire() {
                 <div className="text-sm font-bold mb-1">Choose your home city</div>
                 <div className="text-[10px] text-[#8B8593] mb-2">This is where your promotion starts out. Other cities unlock in nearby groups as you build popularity here — pick carefully, it can't be changed later.</div>
                 <div className="flex flex-wrap gap-1.5">
-                  {CITIES.filter((c) => c !== "International").map((c) => (
+                  {CITIES.filter((c) => !FOREIGN_CITIES.includes(c)).map((c) => (
                     <button
                       key={c}
                       onClick={() => { setStartingCity(c); setCity(c); }}
@@ -6005,13 +6022,16 @@ export default function BookedRingsideEmpire() {
               <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2.5 mb-2">
                 <div>
                   <div className="text-xs font-bold">{activeEventTemplate.name}</div>
-                  <div className="text-[10px] text-[#8B8593]">{showLevel === "main" ? "Main Roster Show" : "Developmental Show"} &middot; {arena.name} &middot; {city} &middot; {showMinutesTarget} min &middot; {activeEventTemplate.dayOfWeek || "Monday"}s</div>
+                  <div className="text-[10px] text-[#8B8593]">{showLevel === "main" ? "Main Roster Show" : "Developmental Show"} &middot; {arena.name} &middot; {city}{FOREIGN_CITY_COUNTRY[city] ? ` (${FOREIGN_CITY_COUNTRY[city]})` : ""} &middot; {showMinutesTarget} min &middot; {activeEventTemplate.dayOfWeek || "Monday"}s</div>
                 </div>
                 <Lock size={14} className="text-[#8B8593] shrink-0" />
               </div>
               <div className="text-[9px] text-[#8B8593]">Set from Calendar &middot; Show Events — change any of this there, not here.</div>
+              {travelSurcharge > 0 && (
+                <div className="text-[9px] text-[#8B6BC0] mt-1.5">&#9992; Touring {FOREIGN_CITY_COUNTRY[city]} — +£{travelSurcharge.toLocaleString()} travel cost on top of the venue.</div>
+              )}
               <div className="text-[10px] text-[#8B8593] mt-2">
-                Capacity {arena.crowdMin.toLocaleString()}&ndash;{arena.crowdMax.toLocaleString()} &middot; Booking cost £{arena.cost.toLocaleString()}
+                Capacity {arena.crowdMin.toLocaleString()}&ndash;{arena.crowdMax.toLocaleString()} &middot; Booking cost £{arena.cost.toLocaleString()}{travelSurcharge > 0 ? ` + £${travelSurcharge.toLocaleString()} travel` : ""}
               </div>
               <div className="mt-3">
                 <div className="flex justify-between text-[10px] text-[#8B8593] mb-1"><span>TICKET PRICE</span><span className="text-[#F2ECDD] font-bold">£{ticketPrice}</span></div>
@@ -6383,6 +6403,7 @@ export default function BookedRingsideEmpire() {
                   <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">SHOW COSTS</div>
                   <div className="space-y-1.5 text-[11px]">
                     <div className="flex justify-between"><span className="text-[#8B8593]">Venue booking</span><span className="font-bold">£{arena.cost.toLocaleString()}</span></div>
+                    {travelSurcharge > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Travel ({FOREIGN_CITY_COUNTRY[city]})</span><span className="font-bold">£{travelSurcharge.toLocaleString()}</span></div>}
                     {projectedSpecialtyCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Specialty matches</span><span className="font-bold">£{projectedSpecialtyCost.toLocaleString()}</span></div>}
                     {projectedFreelanceCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Freelancer fees</span><span className="font-bold">£{projectedFreelanceCost.toLocaleString()}</span></div>}
                     <div className="flex justify-between pt-1.5 border-t border-[#2B2733]"><span className="text-[#8B6BC0] font-bold">Show total</span><span className="font-bold text-[#8B6BC0]">£{projectedShowCost.toLocaleString()}</span></div>
@@ -6461,6 +6482,7 @@ export default function BookedRingsideEmpire() {
               <div><span className="text-[#8B8593]">Revenue</span><div className="font-bold">£{showResult.revenue.toLocaleString()}</div></div>
               <div><span className="text-[#8B8593]">Talent Pay</span><div className="font-bold">£{showResult.wrestlerPay.toLocaleString()}</div></div>
               {showResult.specialtyCost > 0 && <div><span className="text-[#8B8593]">Speciality Costs</span><div className="font-bold">£{showResult.specialtyCost.toLocaleString()}</div></div>}
+              {showResult.travelSurcharge > 0 && <div><span className="text-[#8B8593]">Travel Costs</span><div className="font-bold">£{showResult.travelSurcharge.toLocaleString()}</div></div>}
               {showResult.loanPayment > 0 && <div><span className="text-[#8B8593]">Loan Repayment</span><div className="font-bold">£{showResult.loanPayment.toLocaleString()}</div></div>}
               {showResult.networkIncome > 0 && <div><span className="text-[#8B8593]">TV Income</span><div className="font-bold text-[#8B6BC0]">+£{showResult.networkIncome.toLocaleString()}</div></div>}
               {showResult.sponsorIncome > 0 && <div><span className="text-[#8B8593]">Sponsor Income</span><div className="font-bold text-[#8B6BC0]">+£{showResult.sponsorIncome.toLocaleString()}</div></div>}
