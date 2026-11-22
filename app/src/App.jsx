@@ -298,6 +298,7 @@ function randomBookerName() {
 // standing roster of candidates per role you can hire or release directly.
 // Each role's skill feeds a specific gameplay effect (see where staffRatingBonus,
 // medicalFactor, and ringCrewFactor are computed and used).
+const STAFF_POOL_SIZE_PER_ROLE = 10;
 const STAFF_ROLES = [
   { key: "agent", label: "Agent", desc: "Works matches with your talent on structure and psychology — the better the agent, the higher your matches can realistically grade." },
   { key: "referee", label: "Referee", desc: "Keeps matches under control in the ring — a sharp referee protects a match's floor and keeps a bad night from becoming a disaster." },
@@ -306,6 +307,11 @@ const STAFF_ROLES = [
   { key: "booker", label: "Assistant Booker", desc: "A second set of eyes across the whole card — a strong assistant nudges every show's overall rating up a little." },
   { key: "trainer", label: "Trainer", desc: "Coaches your Developmental prospects directly — the better the trainer, the faster they close the gap to their potential." },
 ];
+// A retiring wrestler's in-ring résumé is exactly the pedigree a locker room
+// wants from one of these three roles — referee/medical/ring crew are
+// different career tracks, so a retiree never rolls into those.
+const STAFF_CAREER_ROLES = ["agent", "booker", "trainer"];
+const RETIRE_TO_STAFF_CHANCE = 0.3;
 function staffWeeklyWage(skill) {
   if (skill <= 20) return 200;
   if (skill <= 35) return 400;
@@ -412,15 +418,52 @@ const DEAL_LENGTH_MAX = 30;
 // Fully generated fictional ring names — no real wrestlers, no trademark risk.
 const FIRST_NAMES = ["Dex", "Cass", "Rory", "Bryce", "Talon", "Ezra", "Knox", "Silas", "Roan", "Jax"];
 const SURNAMES = ["Steele", "Vane", "Kestrel", "Grimm", "Rourke", "Cage", "Blackwood", "Thorne", "Frost", "Sinclair"];
-const FIRST_NAMES_RESERVE = ["Cain", "Dash", "Gunnar", "Hex", "Ivo", "Jett", "Lex", "Mace", "Nash", "Orin"];
-const SURNAMES_RESERVE = ["Ashford", "Briar", "Cross", "Duskwood", "Ember", "Fenwick", "Gale", "Havoc", "Iron", "Justice"];
+const FIRST_NAMES_RESERVE = [
+  "Cain", "Dash", "Gunnar", "Hex", "Ivo", "Jett", "Lex", "Mace", "Nash", "Orin",
+  "Brock", "Cole", "Drex", "Finn", "Gage", "Huxley", "Ira", "Jace", "Kade", "Leon",
+  "Mack", "Nico", "Otto", "Pryce", "Quinn", "Rex", "Stone", "Tate", "Vance", "Wyatt",
+  "Axel", "Blaze", "Cruz", "Dane", "Enzo", "Gunner", "Hollis", "Jonah", "Kian", "Lyle",
+];
+const SURNAMES_RESERVE = [
+  "Ashford", "Briar", "Cross", "Duskwood", "Ember", "Fenwick", "Gale", "Havoc", "Iron", "Justice",
+  "Knight", "Lennox", "Marsh", "Onyx", "Pike", "Quade", "Raine", "Storm", "Talbot", "Vale",
+  "Wraith", "Axton", "Brecker", "Colt", "Draven", "Fox", "Grimsby", "Hawke", "Ironwood", "Jericho",
+  "Kincaid", "Lockhart", "Mercer", "Nightshade", "Obsidian", "Parrish", "Quintrell", "Ravenscroft", "Slate", "Torrance",
+];
 function buildNamePool(firsts, surnames) {
   const names = [];
   firsts.forEach((f) => surnames.forEach((s) => names.push(`${f} ${s}`.toUpperCase())));
   return names;
 }
-const INITIAL_NAMES = buildNamePool(FIRST_NAMES, SURNAMES);
 const RESERVE_NAMES = buildNamePool(FIRST_NAMES_RESERVE, SURNAMES_RESERVE);
+// Debuts draw from RESERVE_NAMES (with any accidental collision against a
+// hand-authored ROSTER_DATA/STAGGERED_DEBUT_DATA name filtered out — built
+// lazily since those arrays are declared later in the file) and never
+// actually run out — once every combination has been used once, the cycle
+// repeats with a Roman-numeral suffix (same trick real-world dynasties
+// use), so a multi-decade save never stops seeing new faces.
+let _debutNamePoolCache = null;
+function debutNamePool() {
+  if (!_debutNamePoolCache) {
+    const authored = new Set([...ROSTER_DATA, ...STAGGERED_DEBUT_DATA].map((d) => d.name.toUpperCase()));
+    _debutNamePoolCache = RESERVE_NAMES.filter((n) => !authored.has(n));
+  }
+  return _debutNamePoolCache;
+}
+function reserveNameAt(index) {
+  const pool = debutNamePool();
+  const cycle = Math.floor(index / pool.length);
+  const base = pool[index % pool.length];
+  return cycle === 0 ? base : `${base} ${toRomanNumeral(cycle + 1)}`;
+}
+function toRomanNumeral(n) {
+  const table = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+  let remaining = n, out = "";
+  for (const [value, symbol] of table) {
+    while (remaining >= value) { out += symbol; remaining -= value; }
+  }
+  return out;
+}
 
 function rand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -755,6 +798,31 @@ const PRESET_STABLES = [
   { name: "By The Rules", members: ["Highway Hound", "Bill Rifle", "Paul Blueblood", "Sean Exman"] },
 ];
 
+// A one-time bulk infusion of extra talent at world creation — half
+// freelance free agents, half young prospects already signed to a rival
+// (so Scouting has real day-one targets instead of only after years of
+// simulated rival signings). Consumes reserveNameAt(0..BULK_DEBUT_COUNT-1);
+// the ongoing debut generator's starting index is set past this range (see
+// where nextReserveIndex is initialized) so nobody ends up with a duplicate
+// name down the line.
+const BULK_DEBUT_COUNT = 300;
+const BULK_FREELANCE_COUNT = 150;
+function buildBulkWorldTalent() {
+  const extras = [];
+  for (let i = 0; i < BULK_FREELANCE_COUNT; i++) {
+    extras.push(makeWrestler(reserveNameAt(i)));
+  }
+  for (let i = BULK_FREELANCE_COUNT; i < BULK_DEBUT_COUNT; i++) {
+    const rival = RIVAL_COMPANIES[(i - BULK_FREELANCE_COUNT) % RIVAL_COMPANIES.length];
+    extras.push(makeWrestlerFromOverall(reserveNameAt(i), rand(15, 45), {
+      age: rand(18, 24),
+      contractedTo: rival.id,
+      contractExpiresWeek: 1 + rand(40, 90),
+    }));
+  }
+  return extras;
+}
+
 let _initialChampions = {}; // company id -> wrestler name, set by buildInitialPool, read once by rivalTitles init
 function buildInitialPool() {
   _initialChampions = {};
@@ -767,7 +835,7 @@ function buildInitialPool() {
     if (d.champion && d.promo) _initialChampions[d.promo] = w.name;
     return w;
   });
-  return pool;
+  return [...pool, ...buildBulkWorldTalent()];
 }
 
 const NEWS_EVENTS = [
@@ -1526,13 +1594,13 @@ export default function BookedRingsideEmpire() {
   const [workingAgreements, setWorkingAgreements] = useState([]); // rival company ids
   const [feederCompany, setFeederCompany] = useState(null); // { name, foundedWeek }
   const [newFeederName, setNewFeederName] = useState("");
-  const [staffPool, setStaffPool] = useState(() => STAFF_ROLES.flatMap((r) => Array.from({ length: 4 }, () => generateStaffCandidate(r.key))));
+  const [staffPool, setStaffPool] = useState(() => STAFF_ROLES.flatMap((r) => Array.from({ length: STAFF_POOL_SIZE_PER_ROLE }, () => generateStaffCandidate(r.key))));
   const [staffSubTab, setStaffSubTab] = useState("agent");
   const [hiringStaffTarget, setHiringStaffTarget] = useState(null);
   const [staffHireWeeks, setStaffHireWeeks] = useState(26);
   const [playerLastTier, setPlayerLastTier] = useState("Unknown");
   const [rivalTitles, setRivalTitles] = useState(() => RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: _initialChampions[c.id] || null, reignStartWeek: _initialChampions[c.id] ? 1 : null })));
-  const [nextReserveIndex, setNextReserveIndex] = useState(0);
+  const [nextReserveIndex, setNextReserveIndex] = useState(BULK_DEBUT_COUNT);
   const [nextStaggeredDebutIndex, setNextStaggeredDebutIndex] = useState(0);
 
   const [tab, setTab] = useState("guide");
@@ -3018,8 +3086,11 @@ export default function BookedRingsideEmpire() {
       }
 
       let poolWithGrowth = null;
-      if (weekNumber % 25 === 0 && nextReserveIndex + 1 < RESERVE_NAMES.length) {
-        const n1 = RESERVE_NAMES[nextReserveIndex], n2 = RESERVE_NAMES[nextReserveIndex + 1];
+      // Fresh free agents trickle in every 25 weeks, indefinitely — reserveNameAt
+      // never runs out (see its own comment), so a decades-long save never stops
+      // seeing new talent the way the old fixed-length name list used to.
+      if (weekNumber % 25 === 0) {
+        const n1 = reserveNameAt(nextReserveIndex), n2 = reserveNameAt(nextReserveIndex + 1);
         poolWithGrowth = [makeWrestler(n1), makeWrestler(n2)];
         setNextReserveIndex((i) => i + 2);
         setUniverseFeed((feed) => [{ id: `g-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${n1} and ${n2} have entered the wrestling scene as free agents.`, type: "rumor" }, ...feed].slice(0, 300));
@@ -3144,6 +3215,7 @@ export default function BookedRingsideEmpire() {
       const injuryNewsEntries = [];
       const newlyInjuredNames = []; // wrestler names injured this tick, any title they hold gets vacated below
       const retiringWrestlers = []; // { name, contractedTo, holdsTitles } — removed from the pool below, titles vacated after
+      const retiringStaffCandidates = []; // ex-wrestlers whose retirement rolled them into a staff career
       const developmentBreakoutNames = []; // developmental talent that trained up to their potential this tick
       setPool((p) => {
         let next = p.map((w) => {
@@ -3306,6 +3378,15 @@ export default function BookedRingsideEmpire() {
               const retireChance = newAge >= 60 ? 1 : clamp((newAge - 45) * 0.06, 0, 0.9);
               if (Math.random() < retireChance) {
                 retiringWrestlers.push({ name: aged.name, contractedTo: aged.contractedTo, holdsTitles: aged.holdsTitles });
+                // A real career in the ring is exactly the résumé a locker
+                // room wants from an agent, trainer, or booker — give some
+                // retirees a second act instead of just vanishing from the
+                // world. Skill reflects how good they actually were.
+                if (Math.random() < RETIRE_TO_STAFF_CHANCE) {
+                  const role = STAFF_CAREER_ROLES[rand(0, STAFF_CAREER_ROLES.length - 1)];
+                  const skill = clamp(Math.round(avgStats(aged) * 0.7 + aged.titleReigns * 5), 20, 95);
+                  retiringStaffCandidates.push({ id: `staffret-${aged.name}-${weekNumber}`, name: aged.name, role, skill, contractedTo: null, contractExpiresWeek: null });
+                }
               }
             }
           }
@@ -3367,7 +3448,14 @@ export default function BookedRingsideEmpire() {
             setRivalTitles((ts) => ts.map((t) => (vacatedRivalTitlesForRetirement.some((v) => v.id === t.id) ? { ...t, holder: null } : t)));
           }
           setPerUseRoster((pu) => pu.filter((n) => !retiringNames.includes(n)));
-          setUniverseFeed((feed) => [...retiringWrestlers.map((r, i) => ({ id: `ret-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${r.name} has announced their retirement from professional wrestling.${r.holdsTitles.length > 0 ? " Their title(s) have been vacated." : ""}`, type: "rumor", companyId: r.contractedTo })), ...feed].slice(0, 300));
+          setUniverseFeed((feed) => [...retiringWrestlers.map((r, i) => {
+            const staffCareer = retiringStaffCandidates.find((c) => c.name === r.name);
+            const careerLine = staffCareer ? ` They've taken a job as ${STAFF_ROLES.find((role) => role.key === staffCareer.role)?.label || "staff"} — available to hire from the Staff screen.` : "";
+            return { id: `ret-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${r.name} has announced their retirement from professional wrestling.${r.holdsTitles.length > 0 ? " Their title(s) have been vacated." : ""}${careerLine}`, type: "rumor", companyId: r.contractedTo };
+          }), ...feed].slice(0, 300));
+          if (retiringStaffCandidates.length > 0) {
+            setStaffPool((sp) => [...sp, ...retiringStaffCandidates]);
+          }
         }
         if (developmentBreakoutNames.length > 0) {
           setUniverseFeed((feed) => [...developmentBreakoutNames.map((name, i) => ({ id: `dev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${name} has developed into a legitimate prospect — they've outgrown what Developmental can teach them and are ready for the main roster.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
@@ -3512,7 +3600,7 @@ export default function BookedRingsideEmpire() {
     setPool(s.pool || buildInitialPool());
     setRivalCompanies(s.rivalCompanies || RIVAL_COMPANIES.map((c, i) => ({ ...c, funds: RIVAL_STARTING_FUNDS[i] ?? 25000, showsRun: 0, lastTier: popularityTier(c.popularity) })));
     setRivalTitles(s.rivalTitles || RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: null })));
-    setNextReserveIndex(s.nextReserveIndex ?? 0);
+    setNextReserveIndex(s.nextReserveIndex ?? BULK_DEBUT_COUNT);
     setNextStaggeredDebutIndex(s.nextStaggeredDebutIndex ?? 0);
     setPerUseRoster(s.perUseRoster || []);
     setTitles(s.titles || [{ id: "world", name: "World Championship", type: "singles", holders: [], reignStartWeek: null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] }]);
@@ -3540,7 +3628,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates(s.eventTemplates || []);
     setWorkingAgreements(s.workingAgreements || []);
     setFeederCompany(s.feederCompany || null);
-    setStaffPool(s.staffPool || STAFF_ROLES.flatMap((r) => Array.from({ length: 4 }, () => generateStaffCandidate(r.key))));
+    setStaffPool(s.staffPool || STAFF_ROLES.flatMap((r) => Array.from({ length: STAFF_POOL_SIZE_PER_ROLE }, () => generateStaffCandidate(r.key))));
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setShowResult(null); setGameOver(false); setTab("company");
@@ -3758,7 +3846,7 @@ export default function BookedRingsideEmpire() {
     setRivalCompanies(RIVAL_COMPANIES.map((c, i) => ({ ...c, funds: RIVAL_STARTING_FUNDS[i] ?? 25000, showsRun: 0, lastTier: popularityTier(c.popularity) })));
     setPlayerLastTier("Unknown");
     setRivalTitles(RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: _initialChampions[c.id] || null })));
-    setNextReserveIndex(0);
+    setNextReserveIndex(BULK_DEBUT_COUNT);
     setNextStaggeredDebutIndex(0);
     setPerUseRoster([]);
     setTitles([{ id: "world", name: "World Championship", type: "singles", holders: [], reignStartWeek: null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] }]);
@@ -3785,7 +3873,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates([]);
     setWorkingAgreements([]);
     setFeederCompany(null);
-    setStaffPool(STAFF_ROLES.flatMap((r) => Array.from({ length: 4 }, () => generateStaffCandidate(r.key))));
+    setStaffPool(STAFF_ROLES.flatMap((r) => Array.from({ length: STAFF_POOL_SIZE_PER_ROLE }, () => generateStaffCandidate(r.key))));
     setSegments([]);
     setNotes("");
     setTab("company");
