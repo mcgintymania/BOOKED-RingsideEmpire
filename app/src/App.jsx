@@ -4681,6 +4681,26 @@ export default function BookedRingsideEmpire() {
                 ))}
                 {signedRoster.length === 0 && <div className="text-xs text-[#8B8593] italic">No wrestlers signed yet.</div>}
               </div>
+
+              <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5 mt-3">RECENT SHOWS</div>
+              <div className="space-y-2">
+                {rivalShowHistory.filter((r) => r.companyId === co.id).slice(0, 5).map((r) => (
+                  <div key={r.id} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
+                    <div className="text-xs font-bold mb-1">Y{r.year} Wk{r.weekOfYear} &middot; ~{r.attendance.toLocaleString()} attendance</div>
+                    <div className="space-y-1">
+                      {r.matches.map((m, i) => (
+                        <div key={i} className="text-[11px] text-[#8B8593] flex items-center justify-between">
+                          <span><span className={m.winner === m.a ? "text-[#CFC9BB] font-semibold" : "line-through"}>{m.a}</span> vs <span className={m.winner === m.b ? "text-[#CFC9BB] font-semibold" : "line-through"}>{m.b}</span></span>
+                          <span className="flex items-center gap-1"><Star size={9} className="text-[#8B6BC0]" />{m.rating}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {rivalShowHistory.filter((r) => r.companyId === co.id).length === 0 && (
+                  <div className="text-xs text-[#8B8593] italic">No shows run yet — check back after a few weeks.</div>
+                )}
+              </div>
             </div>
           );
         })()}
