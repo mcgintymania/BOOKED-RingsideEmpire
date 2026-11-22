@@ -1827,11 +1827,11 @@ export default function BookedRingsideEmpire() {
   const removeScheduledEvent = (id) => setScheduledEvents((ev) => ev.filter((e) => e.id !== id));
 
   const addEventTemplate = () => {
-    if (!newTemplateName.trim()) return;
+    if (!newTemplateName.trim() || !newTemplatePreferredCity) return;
     setEventTemplates((ts) => [...ts, {
       id: `tmpl-${Date.now()}`, name: newTemplateName.trim(), level: newTemplateLevel,
       arenaIdx: newTemplateArenaIdx, intervalWeeks: Math.max(1, newTemplateIntervalWeeks),
-      nextWeekNumber: weekNumber, dayOfWeek: newTemplateDayOfWeek, preferredCity: newTemplatePreferredCity || null,
+      nextWeekNumber: weekNumber, dayOfWeek: newTemplateDayOfWeek, preferredCity: newTemplatePreferredCity,
       showMinutes: newTemplateShowMinutes,
     }]);
     // A brand-new template due immediately (this week) won't be picked up by
@@ -1841,7 +1841,7 @@ export default function BookedRingsideEmpire() {
     setArenaIdx(newTemplateArenaIdx);
     setTicketPrice(ARENAS[newTemplateArenaIdx].ticketMin);
     setShowMinutesTarget(newTemplateShowMinutes);
-    if (newTemplatePreferredCity) setCity(newTemplatePreferredCity);
+    setCity(newTemplatePreferredCity);
     setNewTemplateName(""); setNewTemplateLevel("main"); setNewTemplateArenaIdx(0); setNewTemplateIntervalWeeks(1);
     setNewTemplateDayOfWeek("Monday"); setNewTemplatePreferredCity(""); setNewTemplateShowMinutes(ARENAS[0].showMinutes);
   };
@@ -3103,9 +3103,13 @@ export default function BookedRingsideEmpire() {
           freelancePicks.forEach((w) => { takenFreelancers.add(w.name); rivalFreelanceBookings[w.name] = co.id; });
         }
         const combined = [...signedRoster, ...freelancePicks];
-        if (combined.length >= 2 && Math.random() < RIVAL_SHOW_CHANCE) {
+        // Same PPV calendar the player sees (the header's PPV badge) — on that
+        // week every rival runs a bigger, guaranteed show too, not just a
+        // normal weekly house show.
+        const showChance = isPPVWeek ? 1 : RIVAL_SHOW_CHANCE;
+        if (combined.length >= 2 && Math.random() < showChance) {
           const shuffled = [...combined].sort(() => Math.random() - 0.5);
-          const maxPairsForLength = Math.max(1, Math.round(rivalShowMinutes(co.popularity) / 30));
+          const maxPairsForLength = Math.max(1, Math.round(rivalShowMinutes(co.popularity) / 30)) + (isPPVWeek ? 2 : 0);
           const pairCount = Math.min(Math.floor(shuffled.length / 2), rand(1, maxPairsForLength));
           const showMatches = [];
           for (let i = 0; i < pairCount; i++) {
@@ -3122,12 +3126,12 @@ export default function BookedRingsideEmpire() {
             const rivalAvgAttr = (attrOf(a) + attrOf(b)) / 2;
             const rivalFloor = Math.round(rivalAvgAttr * 0.25);
             const rivalSpread = Math.round(20 + rivalAvgAttr * 0.55);
-            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread) + rivalStaffBonus(co.popularity)));
+            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread) + rivalStaffBonus(co.popularity) + (isPPVWeek ? 5 : 0)));
             showMatches.push({ a: a.name, b: b.name, winner: aWins ? a.name : b.name, rating: rivalRating });
           }
           if (showMatches.length > 0) {
-            const rivalAttendance = Math.max(20, Math.round(co.popularity * 40 + rand(-500, 1500)));
-            newRivalShowRecords.push({ id: `${co.id}-${weekNumber}`, companyId: co.id, companyName: co.name, weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, matches: showMatches, attendance: rivalAttendance });
+            const rivalAttendance = Math.max(20, Math.round(co.popularity * 40 * (isPPVWeek ? 1.6 : 1) + rand(-500, 1500)));
+            newRivalShowRecords.push({ id: `${co.id}-${weekNumber}`, companyId: co.id, companyName: co.name, weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, matches: showMatches, attendance: rivalAttendance, wasPPV: isPPVWeek });
           }
         }
       });
@@ -3866,7 +3870,7 @@ export default function BookedRingsideEmpire() {
       setArenaIdx(due.arenaIdx);
       setTicketPrice(ARENAS[due.arenaIdx].ticketMin);
       setShowMinutesTarget(due.showMinutes || ARENAS[due.arenaIdx].showMinutes);
-      if (due.preferredCity) setCity(due.preferredCity);
+      setCity(due.preferredCity || startingCity);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekCount]);
@@ -5097,8 +5101,12 @@ export default function BookedRingsideEmpire() {
 
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
               <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">SHOW EVENTS</div>
-              <div className="text-[10px] text-[#8B8593] mb-3">Set up your recurring shows once — weekly TV, a monthly special, a quarterly PPV — and the Book screen will auto-load that show's level and venue the week it's due. You still build and run the card yourself.</div>
+              <div className="text-[10px] text-[#8B8593] mb-3">Set up your recurring shows here — level, venue, city, length, day, and cadence (weekly TV, a monthly special, a quarterly PPV). This is the only place any of that gets chosen — the Book screen just shows what's due and lets you build and run the card.</div>
 
+              {!startingCity ? (
+                <div className="text-[10px] text-[#8B8593] italic">Pick your home city from the Book tab first, then come back here to set up your shows.</div>
+              ) : (
+              <>
               {eventTemplates.length > 0 && (
                 <div className="space-y-2 mb-3">
                   {[...eventTemplates].sort((a, b) => a.nextWeekNumber - b.nextWeekNumber).map((t) => (
@@ -5137,7 +5145,7 @@ export default function BookedRingsideEmpire() {
                     <button
                       key={lvl}
                       disabled={devLocked}
-                      onClick={() => { if (!devLocked) setNewTemplateLevel(lvl); }}
+                      onClick={() => { if (devLocked) return; setNewTemplateLevel(lvl); if (lvl === "developmental" && newTemplateArenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX) setNewTemplateArenaIdx(0); }}
                       title={devLocked ? "Found a feeder promotion from Back Office first" : undefined}
                       className={`px-2 py-1 rounded text-[10px] font-bold border ${devLocked ? "text-[#5A5660] border-[#2B2733] cursor-not-allowed" : newTemplateLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}
                     >
@@ -5146,7 +5154,11 @@ export default function BookedRingsideEmpire() {
                   );
                 })}
                 <select value={newTemplateArenaIdx} onChange={(e) => setNewTemplateArenaIdx(Number(e.target.value))} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
-                  {ARENAS.map((ar, i) => <option key={ar.name} value={i}>{ar.name}</option>)}
+                  {ARENAS.map((ar, i) => {
+                    const tierLocked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[ar.minTier];
+                    const levelLocked = newTemplateLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX;
+                    return <option key={ar.name} value={i} disabled={tierLocked || levelLocked}>{ar.name}{tierLocked ? ` (${ar.minTier}+)` : levelLocked ? " (Main Roster only)" : ""}</option>;
+                  })}
                 </select>
                 <select value={newTemplateShowMinutes} onChange={(e) => setNewTemplateShowMinutes(Number(e.target.value))} title="How long this show runs — independent of venue; a weekly TV show and a monthly PPV can use the same venue but very different runtimes." className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
                   {[15, 30, 45, 60, 90, 120, 150, 180].map((m) => <option key={m} value={m}>{m} min</option>)}
@@ -5160,13 +5172,15 @@ export default function BookedRingsideEmpire() {
                   {DAYS_OF_WEEK.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
                 <select value={newTemplatePreferredCity} onChange={(e) => setNewTemplatePreferredCity(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
-                  <option value="">Any city</option>
+                  <option value="" disabled>Choose a city...</option>
                   {unlockedCities.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <button onClick={addEventTemplate} disabled={!newTemplateName.trim()} className="ml-auto px-3 py-1.5 rounded text-[10px] font-bold bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD]">
+                <button onClick={addEventTemplate} disabled={!newTemplateName.trim() || !newTemplatePreferredCity} className="ml-auto px-3 py-1.5 rounded text-[10px] font-bold bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD]">
                   Add
                 </button>
               </div>
+              </>
+              )}
             </div>
 
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
@@ -5633,7 +5647,7 @@ export default function BookedRingsideEmpire() {
               <div className="space-y-2">
                 {rivalShowHistory.filter((r) => r.companyId === co.id).slice(0, 5).map((r) => (
                   <div key={r.id} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
-                    <div className="text-xs font-bold mb-1">Y{r.year} Wk{r.weekOfYear} &middot; ~{r.attendance.toLocaleString()} attendance</div>
+                    <div className="text-xs font-bold mb-1">Y{r.year} Wk{r.weekOfYear} &middot; ~{r.attendance.toLocaleString()} attendance{r.wasPPV && <span className="text-[#8B6BC0]"> &middot; PPV</span>}</div>
                     <div className="space-y-1">
                       {r.matches.map((m, i) => (
                         <div key={i} className="text-[11px] text-[#8B8593] flex items-center justify-between">
@@ -5762,133 +5776,52 @@ export default function BookedRingsideEmpire() {
             <div className="text-center">
               <div className="text-lg font-black" style={{ fontFamily: "Anton, sans-serif" }}>YEAR {currentYear} &middot; WEEK {weekOfYear(weekNumber)}</div>
               <div className="text-[10px] text-[#8B8593]">{formatDate(scheduledDate)}</div>
-              {isPPVWeek && <div className="text-[10px] text-[#8B6BC0] font-bold tracking-wide mt-0.5">BIG SHOW WEEK &mdash; consider booking the Major Arena for a bigger payoff</div>}
             </div>
+            {!startingCity ? (
+              <div className="bg-[#17151C] border border-[#5B3B8C] rounded-lg p-4">
+                <div className="text-sm font-bold mb-1">Choose your home city</div>
+                <div className="text-[10px] text-[#8B8593] mb-2">This is where your promotion starts out. Other cities unlock in nearby groups as you build popularity here — pick carefully, it can't be changed later.</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {CITIES.filter((c) => c !== "International").map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => { setStartingCity(c); setCity(c); }}
+                      className="px-2.5 py-1 rounded text-[10px] font-semibold border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD] hover:border-[#5B3B8C]"
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : !activeEventTemplate ? (
+              <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-6 text-center">
+                <div className="text-sm font-bold mb-1">No show scheduled this week</div>
+                <div className="text-[10px] text-[#8B8593] mb-3">Level, venue, city, and length are all set up from Calendar &middot; Show Events — nothing to book here until one's due. You can also just advance the week without a show.</div>
+                <button onClick={() => setTab("calendar")} className="px-4 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded">Go to Calendar</button>
+              </div>
+            ) : (
+            <>
             <div className="flex flex-col dt:flex-row gap-5">
             <div className="flex-1 min-w-0 space-y-5">
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
-              <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Ticket size={14} /> SHOW LEVEL</div>
-              {activeEventTemplate ? (
-                <>
-                  <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2.5 mb-2">
-                    <div>
-                      <div className="text-xs font-bold">{activeEventTemplate.name}</div>
-                      <div className="text-[10px] text-[#8B8593]">{showLevel === "main" ? "Main Roster Show" : "Developmental Show"} &middot; {activeEventTemplate.dayOfWeek || "Monday"}s</div>
-                    </div>
-                    <Lock size={14} className="text-[#8B8593]" />
-                  </div>
-                  <div className="text-[9px] text-[#8B8593]">Set by this event — change the level or venue from Calendar &middot; Show Events.</div>
-                </>
-              ) : (
-                <>
-                  <div className="flex gap-2 mb-2">
-                    {["main", "developmental"].map((lvl) => {
-                      const devLocked = lvl === "developmental" && !feederCompany;
-                      return (
-                        <button
-                          key={lvl}
-                          disabled={devLocked}
-                          onClick={() => { if (devLocked) return; setShowLevel(lvl); if (lvl === "developmental" && arenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX) { setArenaIdx(0); setTicketPrice(ARENAS[0].ticketMin); setShowMinutesTarget(ARENAS[0].showMinutes); } }}
-                          className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${devLocked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : showLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"}`}
-                          style={!devLocked && showLevel === lvl ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}
-                        >
-                          {lvl === "main" ? "MAIN ROSTER SHOW" : devLocked ? "DEVELOPMENTAL (LOCKED)" : "DEVELOPMENTAL SHOW"}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="text-[9px] text-[#8B8593]">
-                    {showLevel === "main"
-                      ? `Draws from your Main Roster (${roster.filter((w) => (w.rosterLevel || "main") === "main").length}) plus per-use talent. No event scheduled this week — set one up from Calendar to lock in a weekly/monthly/PPV slot.`
-                      : `Draws from your Developmental roster (${roster.filter((w) => w.rosterLevel === "developmental").length}) plus per-use talent — capped to Backyard/Small venues regardless of company tier.`}
-                    {!feederCompany && " Found a feeder promotion from Back Office to unlock Developmental."}
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
-              <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Building2 size={14} /> VENUE</div>
-              {activeEventTemplate ? (
-                <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2.5 mb-4">
-                  <span className="text-xs font-bold">{arena.name.toUpperCase()}</span>
-                  <Lock size={14} className="text-[#8B8593]" />
+              <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Ticket size={14} /> THIS WEEK'S SHOW</div>
+              <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2.5 mb-2">
+                <div>
+                  <div className="text-xs font-bold">{activeEventTemplate.name}</div>
+                  <div className="text-[10px] text-[#8B8593]">{showLevel === "main" ? "Main Roster Show" : "Developmental Show"} &middot; {arena.name} &middot; {city} &middot; {showMinutesTarget} min &middot; {activeEventTemplate.dayOfWeek || "Monday"}s</div>
                 </div>
-              ) : (
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {ARENAS.map((ar, i) => {
-                    const locked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[ar.minTier] || (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX);
-                    return (
-                      <button
-                        key={ar.name}
-                        onClick={() => { if (locked) return; setArenaIdx(i); setTicketPrice(ar.ticketMin); setShowMinutesTarget(ar.showMinutes); }}
-                        disabled={locked}
-                        className={`px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${
-                          locked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : i === arenaIdx ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"
-                        }`}
-                        style={!locked && i === arenaIdx ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C", color: "#F2ECDD" } : undefined}
-                      >
-                        {ar.name.toUpperCase()}{locked ? (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX ? " (Main Roster only)" : ` (${ar.minTier}+)`) : ""}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <div className="text-[10px] text-[#8B8593] mb-3">
+                <Lock size={14} className="text-[#8B8593] shrink-0" />
+              </div>
+              <div className="text-[9px] text-[#8B8593]">Set from Calendar &middot; Show Events — change any of this there, not here.</div>
+              <div className="text-[10px] text-[#8B8593] mt-2">
                 Capacity {arena.crowdMin.toLocaleString()}&ndash;{arena.crowdMax.toLocaleString()} &middot; Booking cost £{arena.cost.toLocaleString()}
               </div>
-              <div className="mb-4">
-                <div className="text-[10px] text-[#8B8593] mb-1.5">CITY</div>
-                {!startingCity ? (
-                  <div className="bg-[#17151C] border border-[#5B3B8C] rounded-lg p-3">
-                    <div className="text-xs font-bold mb-1">Choose your home city</div>
-                    <div className="text-[10px] text-[#8B8593] mb-2">This is where your promotion starts out. Other cities unlock in nearby groups as you build popularity here — pick carefully, it can't be changed later.</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {CITIES.filter((c) => c !== "International").map((c) => (
-                        <button
-                          key={c}
-                          onClick={() => { setStartingCity(c); setCity(c); }}
-                          className="px-2.5 py-1 rounded text-[10px] font-semibold border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD] hover:border-[#5B3B8C]"
-                        >
-                          {c}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {CITIES.map((c) => {
-                      const tierRequirement = LOCKED_CITIES[c];
-                      const tierLocked = tierRequirement && TIER_RANK[popularityTier(popularity)] < TIER_RANK[tierRequirement];
-                      const geoLocked = !tierRequirement && !unlockedCities.includes(c);
-                      const locked = tierLocked || geoLocked;
-                      return (
-                        <button
-                          key={c}
-                          onClick={() => { if (!locked) setCity(c); }}
-                          disabled={locked}
-                          title={geoLocked ? "Get a connected city to 70% popularity to unlock this" : undefined}
-                          className={`px-2.5 py-1 rounded text-[10px] font-semibold border flex items-center gap-1 ${
-                            locked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : city === c ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"
-                          }`}
-                          style={!locked && city === c ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C", color: "#F2ECDD" } : undefined}
-                        >
-                          {c}{tierLocked ? ` (${tierRequirement}+)` : geoLocked ? " 🔒" : cityVisits[c] > 0 && <span className="opacity-60">&middot;{cityVisits[c]}</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {!city && <div className="text-[9px] text-[#8B8593] italic mt-1.5">Pick a city to run your show in.</div>}
-              </div>
-              <div className="mb-3">
+              <div className="mt-3">
                 <div className="flex justify-between text-[10px] text-[#8B8593] mb-1"><span>TICKET PRICE</span><span className="text-[#F2ECDD] font-bold">£{ticketPrice}</span></div>
                 <input type="range" min={arena.ticketMin} max={arena.ticketMax} value={ticketPrice} onChange={(e) => setTicketPrice(Number(e.target.value))} className="w-full accent-[#8B6BC0]" />
               </div>
-              <div className="mb-3">
-                <div className="flex justify-between text-[10px] text-[#8B8593] mb-1"><span>SHOW LENGTH</span><span className="text-[#F2ECDD] font-bold">{showMinutesTarget} min</span></div>
-                <input type="range" min={SHOW_MINUTES_MIN} max={SHOW_MINUTES_MAX} step={SHOW_MINUTES_STEP} value={showMinutesTarget} onChange={(e) => setShowMinutesTarget(Number(e.target.value))} className="w-full accent-[#8B6BC0]" />
-                <div className="text-[9px] text-[#8B8593] mt-1">Your call — a quick {arena.name.toLowerCase()} taping or an extended flagship card with more room to tell the story. {arena.name} usually runs {arena.showMinutes} min.</div>
-              </div>
+            </div>
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
               {popularity >= MERCH_UNLOCK_POPULARITY && (
                 <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2 text-[11px] mb-3">
                   <span className="text-[#8B8593]">Merch stock on hand</span>
@@ -6232,6 +6165,8 @@ export default function BookedRingsideEmpire() {
             <button onClick={() => runShow()} disabled={!readyToRun || running} className="w-full py-3.5 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD] font-black tracking-widest text-sm rounded transition-colors" style={{ fontFamily: "Anton, sans-serif" }}>
               {running ? "RUNNING THE SHOW..." : "RUN THE SHOW"}
             </button>
+            </>
+            )}
           </div>
         )}
 
@@ -6416,7 +6351,7 @@ export default function BookedRingsideEmpire() {
                     .filter((r) => resultsCompanyFilter === "all" || r.companyId === resultsCompanyFilter)
                     .map((r) => (
                       <div key={r.id} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
-                        <div className="text-xs font-bold mb-1">{r.companyName} &middot; Y{r.year} Wk{r.weekOfYear}</div>
+                        <div className="text-xs font-bold mb-1">{r.companyName} &middot; Y{r.year} Wk{r.weekOfYear}{r.wasPPV && <span className="text-[#8B6BC0]"> &middot; PPV</span>}</div>
                         <div className="space-y-1">
                           {r.matches.map((m, i) => (
                             <div key={i} className="text-[11px] text-[#8B8593] flex items-center justify-between">
