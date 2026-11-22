@@ -158,20 +158,71 @@ function computeUnlockedCities(cityPopularity, startingCity) {
 // gated behind a minimum company tier so a brand-new promotion can't walk into a
 // 15,000+ seat arena with a guaranteed crowd before it's earned any reputation.
 const ARENAS = [
-  { name: "Backyard", crowdMin: 5, crowdMax: 50, ticketMin: 5, ticketMax: 25, cost: 75, minTier: "Unknown" },
-  { name: "Small", crowdMin: 100, crowdMax: 500, ticketMin: 15, ticketMax: 35, cost: 750, minTier: "Local" },
-  { name: "Medium", crowdMin: 500, crowdMax: 2750, ticketMin: 30, ticketMax: 50, cost: 4000, minTier: "Regional" },
-  { name: "Large", crowdMin: 2750, crowdMax: 20000, ticketMin: 45, ticketMax: 65, cost: 12000, minTier: "National" },
-  { name: "Major Arena", crowdMin: 15000, crowdMax: 32000, ticketMin: 60, ticketMax: 80, cost: 20000, minTier: "International" },
+  { name: "Backyard", crowdMin: 5, crowdMax: 50, ticketMin: 5, ticketMax: 25, cost: 75, minTier: "Unknown", showMinutes: 30 },
+  { name: "Small", crowdMin: 100, crowdMax: 500, ticketMin: 15, ticketMax: 35, cost: 750, minTier: "Local", showMinutes: 45 },
+  { name: "Medium", crowdMin: 500, crowdMax: 2750, ticketMin: 30, ticketMax: 50, cost: 4000, minTier: "Regional", showMinutes: 60 },
+  { name: "Large", crowdMin: 2750, crowdMax: 20000, ticketMin: 45, ticketMax: 65, cost: 12000, minTier: "National", showMinutes: 75 },
+  { name: "Major Arena", crowdMin: 15000, crowdMax: 32000, ticketMin: 60, ticketMax: 80, cost: 20000, minTier: "International", showMinutes: 90 },
 ];
 
-const SLOT_DEFS = [
-  { key: "opener", label: "Opener", cap: 60 },
-  { key: "lower", label: "Lower Card", cap: 75 },
-  { key: "mid", label: "Mid Card", cap: 80 },
-  { key: "upper", label: "Upper Card", cap: 95 },
-  { key: "main", label: "Main Event", cap: 100 },
-];
+// Booking is a time-budgeted running order (segments: matches or angles),
+// not fixed slots — a segment's quality ceiling is set by where it sits in
+// that order (later = bigger) and, secondarily, how many minutes it's
+// given. This replaces the old fixed 5-slot SLOT_DEFS (Opener 60, Lower 75,
+// Mid 80, Upper 95, Main 100) with a continuous equivalent: a show with
+// exactly 5 segments produces caps of 64/73/82/91/100 — within a few
+// points of the original curve at every position, since the existing
+// match-rating spread (typically 20-75+) already dwarfs a swing that
+// small. Minutes only scale a segment DOWN from its position-based
+// ceiling, never above it — position stays the dominant factor, matching
+// the decision to keep this a translation of the existing curve rather
+// than a from-scratch rebalance.
+const SEGMENT_CAP_MIN = 55;
+const SEGMENT_CAP_MAX = 100;
+const SEGMENT_FULL_CAP_MINUTES = 12;
+function computeSegmentCap(index, total, minutes) {
+  const positionFrac = (index + 1) / total;
+  const positionCap = SEGMENT_CAP_MIN + (SEGMENT_CAP_MAX - SEGMENT_CAP_MIN) * positionFrac;
+  const minutesFactor = clamp(0.8 + 0.2 * (minutes / SEGMENT_FULL_CAP_MINUTES), 0.8, 1);
+  return Math.round(positionCap * minutesFactor);
+}
+// Cosmetic only (what the card calls itself in results/news) — quantizes
+// the same position fraction the cap uses into the original five names, so
+// the last segment is always literally "Main Event" regardless of how many
+// segments the show has. That literal string is load-bearing: a wrestler's
+// "wants a push" request checks for it directly.
+function segmentLabel(index, total) {
+  if (index === total - 1) return "Main Event";
+  const frac = (index + 1) / total;
+  if (frac >= 0.8) return "Upper Card";
+  if (frac >= 0.6) return "Mid Card";
+  if (frac >= 0.4) return "Lower Card";
+  return "Opener";
+}
+function isSegmentComplete(seg) {
+  if (seg.format === "segment") return !!seg.team1[0];
+  if (seg.type === "triple") return seg.team1.filter(Boolean).length >= 3;
+  if (seg.type === "fatal4") return seg.team1.filter(Boolean).length >= 4;
+  return seg.team1.filter(Boolean).length > 0 && seg.team2.filter(Boolean).length > 0;
+}
+const SEGMENT_MIN_MINUTES = 3;
+const SEGMENT_MAX_MINUTES = 30;
+const SEGMENT_DEFAULT_MINUTES = 8;
+// Module-level, not component state — segment ids just need to be unique
+// for the lifetime of the page, same role a React list key plays, and
+// don't need to survive a save/reload (the in-progress card isn't saved).
+let nextSegmentId = 1;
+function makeSegment(format) {
+  return {
+    id: nextSegmentId++,
+    format, type: "singles",
+    team1: [null, null, null, null], team2: [null, null],
+    titleId: null, specialtyId: null,
+    minutes: SEGMENT_DEFAULT_MINUTES,
+    result: null,
+  };
+}
+
 
 // Longer contracts cost proportionally more, but now that a signed wrestler costs
 // nothing extra per show, the multiplier is steeper than before — you're buying
@@ -1197,7 +1248,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Pick a venue (locked by your company tier — Backyard is always open, Major Arena needs International), a city, and a ticket price. Higher prices mean fewer fans, and your reputation in that specific city sets the ceiling.",
       "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks — International stays gated separately, behind company tier.",
-      "Build your card across five slots — Opener through Main Event — each with its own rating ceiling, so a top star wasted in the Opener still can't out-rate your Main Event. Once you're National tier or above, leaving slots empty costs you real rating and money — fans at that level expect a full card.",
+      "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
       "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, Fatal 4-Way, or a Segment (a promo — rated on charisma, no winner or energy cost, and you can aim it at another signed wrestler to nudge or spark a rivalry).",
       "Every match resolves with a method — Pinfall, Submission, Disqualification, or Countout — weighted by the winning side's stats.",
       "Booking the exact same matchup over and over gets a real, escalating rating penalty as fans get tired of seeing it — shown as a warning before you run the show. An active rivalry gets that penalty halved, since building toward a blowoff is a real reason to run it back.",
@@ -1448,7 +1499,7 @@ export default function BookedRingsideEmpire() {
   const cityDiversityCap = Math.min(100, 15 + (visitedCities.length - 1) * 14);
   const rawPopularity = visitedCities.length > 0 ? visitedCities.reduce((s, c) => s + cityPopularity[c], 0) / visitedCities.length : 0;
   const popularity = visitedCities.length > 0 ? Math.round(Math.min(rawPopularity, cityDiversityCap)) : 0;
-  const [slots, setSlots] = useState(() => SLOT_DEFS.map((d) => ({ key: d.key, format: "match", type: "singles", team1: [null, null, null, null], team2: [null, null], titleId: null, specialtyId: null })));
+  const [segments, setSegments] = useState([]);
 
   const [titles, setTitles] = useState([
     { id: "world", name: "World Championship", type: "singles", weightClass: null, genderLock: null, holders: [], reignStartWeek: null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] },
@@ -1747,21 +1798,162 @@ export default function BookedRingsideEmpire() {
     setEditingTitleId(null);
   };
 
-  const setSlotFormat = (key, format) => {
-    setSlots((prev) => prev.map((s) => (s.key === key ? { ...s, format, team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null } : s)));
+  // Ported straight from the old fixed-slot resolution logic (same formulas,
+  // same order of operations) — the only thing that changed is where `cap`
+  // comes from: a computed position+minutes value instead of a SLOT_DEFS
+  // lookup. Called once whenever a segment's own content changes (not when
+  // other segments are added/removed/reordered around it) — a segment's
+  // result is frozen at whatever position/total it had at that moment,
+  // the same way a human booker wouldn't expect match 1's winner to change
+  // because they added a match 4.
+  const resolveSegmentResult = (seg, index, total) => {
+    const cap = computeSegmentCap(index, total, seg.minutes);
+    const label = segmentLabel(index, total);
+    if (seg.format === "segment") {
+      const performer = seg.team1[0];
+      const subject = seg.team2 && seg.team2[0] ? seg.team2[0] : null;
+      const chaFloor = Math.round(performer.cha * 0.4);
+      const rating = Math.max(chaFloor, Math.min(cap, chaFloor + Math.round(Math.random() * (cap - chaFloor))));
+      return { slotKey: seg.id, slotLabel: label, format: "segment", performer, subject, rating, titleInfo: null };
+    }
+    if (seg.type === "triple" || seg.type === "fatal4") {
+      const participants = seg.team1.filter(Boolean);
+      // Fatigue-adjusted weighted random winner — everyone's odds scale with
+      // their effective strength, but it's not a strict 1v1 coin flip.
+      const weights = participants.map((w) => attrOf(w) * (0.6 + 0.4 * (w.eng / 100)));
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      let roll = Math.random() * totalWeight;
+      let winnerIdx = 0;
+      for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll <= 0) { winnerIdx = i; break; } }
+      const winnerTeam = [participants[winnerIdx]];
+      const loserTeam = participants.filter((_, i) => i !== winnerIdx);
+      const avgAttr = participants.reduce((s, w) => s + attrOf(w), 0) / participants.length;
+      const rawFloor = Math.round(avgAttr * 0.25);
+      const floor = Math.min(cap, rawFloor);
+      const spread = Math.min(cap - floor, Math.round(20 + avgAttr * 0.55));
+      let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread) + 3)); // scrambles run a touch hotter
+      const specialty = seg.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === seg.specialtyId) : null;
+      if (specialty) rating = Math.min(cap, rating + specialty.ratingBonus);
+      let titleInfo = null;
+      if (seg.titleId) {
+        const title = titles.find((t) => t.id === seg.titleId);
+        if (title) {
+          const winnerNames = winnerTeam.map((w) => w.name);
+          const defended = title.holders.length > 0 && title.holders.every((h) => winnerNames.includes(h));
+          titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
+        }
+      }
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod: pickWinMethod(winnerTeam) };
+    }
+    const team1 = seg.team1.filter(Boolean);
+    const team2 = seg.team2.filter(Boolean);
+    const attr1 = teamAttr(team1);
+    const attr2 = teamAttr(team2);
+    // Gassed wrestlers perform worse — fatigue temporarily knocks down effective
+    // stats for this match (up to 40% at 0 energy), affecting both who wins and
+    // how good the match can possibly be.
+    const fatigueMult1 = 0.6 + 0.4 * (teamStat(team1, "eng") / 100);
+    const fatigueMult2 = 0.6 + 0.4 * (teamStat(team2, "eng") / 100);
+    const effAttr1 = attr1 * fatigueMult1;
+    const effAttr2 = attr2 * fatigueMult2;
+    const attrProb1 = effAttr1 / (effAttr1 + effAttr2);
+
+    const specialty = seg.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === seg.specialtyId) : null;
+    let prob1 = attrProb1;
+    if (specialty) {
+      const spec1 = teamStat(team1, specialty.statKey);
+      const spec2 = teamStat(team2, specialty.statKey);
+      const specProb1 = spec1 / (spec1 + spec2);
+      prob1 = attrProb1 * (1 - SPECIALTY_WEIGHT) + specProb1 * SPECIALTY_WEIGHT;
+    }
+    const winnerTeam = Math.random() < prob1 ? team1 : team2;
+    const loserTeam = winnerTeam === team1 ? team2 : team1;
+    const rawFloor = Math.round(((effAttr1 + effAttr2) / 2) * 0.25);
+    const floor = Math.min(cap, rawFloor);
+    const avgEffAttr = (effAttr1 + effAttr2) / 2;
+    const spread = Math.min(cap - floor, Math.round(20 + avgEffAttr * 0.55));
+    let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread)));
+    if (specialty) rating = Math.min(cap, rating + specialty.ratingBonus);
+    // A clean Face vs Heel dynamic tells a better story than two of the same.
+    const aligns1 = new Set(team1.map((w) => w.alignment));
+    const aligns2 = new Set(team2.map((w) => w.alignment));
+    if (aligns1.size === 1 && aligns2.size === 1 && [...aligns1][0] !== [...aligns2][0]) {
+      rating = Math.min(cap, rating + 4);
+    }
+
+    // A booked-in rivalry pays off with a rating bump scaled to how heated it's gotten.
+    let storyKey = null;
+    if (team1.length === 1 && team2.length === 1 && team1[0].rivals.includes(team2[0].name) && team2[0].rivals.includes(team1[0].name)) {
+      storyKey = [team1[0].name, team2[0].name].sort().join("|");
+      const existing = storylines[storyKey] || { intensity: 20, matchesFought: 0 };
+      rating = Math.min(cap, rating + Math.round(existing.intensity / 10));
+    }
+    // Fans notice when you run the same match back over and over — a
+    // penalty that scales with how often this exact pairing has shown up
+    // in your recent shows, and fades away once you stop repeating it.
+    // An active rivalry gets it halved — building toward a blowoff is a
+    // real reason to run it back, not just repetition for its own sake.
+    const matchupKey = [...team1.map((w) => w.name), ...team2.map((w) => w.name)].sort().join("|");
+    const recentRepeats = recentMatchups.filter((k) => k === matchupKey).length;
+    if (recentRepeats > 0) {
+      const stalenessPenalty = Math.min(25, recentRepeats * 6);
+      rating = Math.max(floor, rating - (storyKey ? Math.round(stalenessPenalty / 2) : stalenessPenalty));
+    }
+
+    let stableStoryKey = null;
+    if (team1.length === 2 && team2.length === 2) {
+      const s1 = stables.find((s) => s.members.length >= 2 && team1.every((w) => [s.members[0], s.members[1]].includes(w.name)));
+      const s2 = stables.find((s) => s.members.length >= 2 && team2.every((w) => [s.members[0], s.members[1]].includes(w.name)));
+      if (s1 && s2 && (s1.rivalStableIds || []).includes(s2.id) && (s2.rivalStableIds || []).includes(s1.id)) {
+        stableStoryKey = [s1.id, s2.id].sort().join("|");
+        const existing = stableStorylines[stableStoryKey] || { intensity: 20, matchesFought: 0 };
+        rating = Math.min(cap, rating + Math.round(existing.intensity / 10));
+      }
+    }
+
+    let titleInfo = null;
+    if (seg.titleId) {
+      const title = titles.find((t) => t.id === seg.titleId);
+      if (title) {
+        const winnerNames = winnerTeam.map((w) => w.name).sort();
+        const currentHolders = [...title.holders].sort();
+        const defended = title.holders.length > 0 && winnerNames.length === currentHolders.length && winnerNames.every((n, i) => n === currentHolders[i]);
+        titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
+      }
+    }
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod: pickWinMethod(winnerTeam) };
   };
-  const setSlotType = (key, type) => {
-    setSlots((prev) => prev.map((s) => {
-      if (s.key !== key) return s;
+
+  // Applies a field update to one segment, then re-resolves it (or clears
+  // its result) using its CURRENT position in the running order — every
+  // segment setter below routes through this so resolution never has to be
+  // triggered separately.
+  const updateSegment = (id, fn) => {
+    setSegments((prev) => {
+      const idx = prev.findIndex((s) => s.id === id);
+      if (idx === -1) return prev;
+      const updated = fn(prev[idx]);
+      const withResult = { ...updated, result: isSegmentComplete(updated) ? resolveSegmentResult(updated, idx, prev.length) : null };
+      const next = [...prev];
+      next[idx] = withResult;
+      return next;
+    });
+  };
+  const addSegment = (format) => setSegments((prev) => [...prev, makeSegment(format)]);
+  const removeSegment = (id) => setSegments((prev) => prev.filter((s) => s.id !== id));
+  const setSegmentFormat = (id, format) => {
+    updateSegment(id, (s) => ({ ...s, format, team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null }));
+  };
+  const setSegmentType = (id, type) => {
+    updateSegment(id, (s) => {
       if (type === "triple" || type === "fatal4") {
         return { ...s, type, team1: [s.team1[0], s.team1[1] || null, s.team1[2] || null, s.team1[3] || null], team2: [], titleId: null };
       }
       return { ...s, type, team1: [s.team1[0], type === "tag" ? s.team1[1] : null, null, null], team2: [s.team2[0], type === "tag" ? s.team2[1] : null], titleId: null };
-    }));
+    });
   };
-  const setSlotMember = (key, side, memberIdx, wrestler) => {
-    setSlots((prev) => prev.map((s) => {
-      if (s.key !== key) return s;
+  const setSegmentMember = (id, side, memberIdx, wrestler) => {
+    updateSegment(id, (s) => {
       const team = [...s[side]];
       team[memberIdx] = wrestler;
       // If the primary changes and now belongs to a stable that excludes the current partner, clear the partner.
@@ -1770,19 +1962,16 @@ export default function BookedRingsideEmpire() {
         if (stable && !stable.members.includes(team[1].name)) team[1] = null;
       }
       return { ...s, [side]: team, titleId: null };
-    }));
+    });
   };
-  const setSlotTitle = (key, titleId) => setSlots((prev) => prev.map((s) => (s.key === key ? { ...s, titleId } : s)));
-  const setSlotSpecialty = (key, specialtyId) => setSlots((prev) => prev.map((s) => (s.key === key ? { ...s, specialtyId } : s)));
+  const setSegmentTitle = (id, titleId) => updateSegment(id, (s) => ({ ...s, titleId }));
+  const setSegmentSpecialty = (id, specialtyId) => updateSegment(id, (s) => ({ ...s, specialtyId }));
+  const setSegmentMinutes = (id, minutes) => updateSegment(id, (s) => ({ ...s, minutes: clamp(minutes, SEGMENT_MIN_MINUTES, SEGMENT_MAX_MINUTES) }));
 
-  const usedNames = new Set(slots.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).map((w) => w.name));
+  const usedNames = new Set(segments.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).map((w) => w.name));
   const arenaLocked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[arena.minTier];
-  const readyToRun = !gameOver && !arenaLocked && slots.some((s) => {
-    if (s.format === "segment") return s.team1.filter(Boolean).length > 0;
-    if (s.type === "triple") return s.team1.filter(Boolean).length >= 3;
-    if (s.type === "fatal4") return s.team1.filter(Boolean).length >= 4;
-    return s.team1.filter(Boolean).length > 0 && s.team2.filter(Boolean).length > 0;
-  }) && !!city;
+  const totalShowMinutes = segments.reduce((sum, s) => sum + s.minutes, 0);
+  const readyToRun = !gameOver && !arenaLocked && segments.some((s) => isSegmentComplete(s)) && !!city;
 
   const cityPop = city ? cityPopularity[city] : popularity;
   // Price always thins the crowd (multiplicative, so it matters at any popularity level),
@@ -1791,8 +1980,8 @@ export default function BookedRingsideEmpire() {
   // Main Event matters too — real drawing power there swings the crowd up to ±25%.
   const priceFrac = (ticketPrice - arena.ticketMin) / (arena.ticketMax - arena.ticketMin || 1);
   const priceMultiplier = 1 - priceFrac * 0.6; // 1.0 at cheapest, 0.4 at most expensive
-  const mainSlotForDraw = slots.find((s) => s.key === "main");
-  const mainDrawParticipants = mainSlotForDraw ? [...(mainSlotForDraw.team1 || []).filter(Boolean), ...(mainSlotForDraw.team2 || []).filter(Boolean)] : [];
+  const mainSegmentForDraw = segments.length > 0 ? segments[segments.length - 1] : null;
+  const mainDrawParticipants = mainSegmentForDraw ? [...(mainSegmentForDraw.team1 || []).filter(Boolean), ...(mainSegmentForDraw.team2 || []).filter(Boolean)] : [];
   const mainDrawAvg = mainDrawParticipants.length ? mainDrawParticipants.reduce((s, w) => s + (w.drawPower ?? 50), 0) / mainDrawParticipants.length : 50;
   const drawFactor = 1 + ((mainDrawAvg - 50) / 100) * 0.5;
   const baseFrac = 0.1 + (cityPop / 100) * 0.85; // 0.1 floor rising to 0.95 ceiling as score climbs
@@ -1805,130 +1994,15 @@ export default function BookedRingsideEmpire() {
     setRunShowError(null);
     setTimeout(() => {
       try {
-      const thisShowMatchupKeys = [];
-      const matches = slots
-        .map((slot) => {
-          const def = SLOT_DEFS.find((d) => d.key === slot.key);
-          if (slot.format === "segment") {
-            const performer = slot.team1[0];
-            if (!performer) return null;
-            const subject = slot.team2 && slot.team2[0] ? slot.team2[0] : null;
-            const chaFloor = Math.round(performer.cha * 0.4);
-            const rating = Math.max(chaFloor, Math.min(def.cap, chaFloor + Math.round(Math.random() * (def.cap - chaFloor))));
-            return { slotKey: slot.key, slotLabel: def.label, format: "segment", performer, subject, rating, titleInfo: null };
-          }
-          if (slot.type === "triple" || slot.type === "fatal4") {
-            const participants = slot.team1.filter(Boolean);
-            const needed = slot.type === "triple" ? 3 : 4;
-            if (participants.length < needed) return null;
-            // Fatigue-adjusted weighted random winner — everyone's odds scale with
-            // their effective strength, but it's not a strict 1v1 coin flip.
-            const weights = participants.map((w) => attrOf(w) * (0.6 + 0.4 * (w.eng / 100)));
-            const totalWeight = weights.reduce((a, b) => a + b, 0);
-            let roll = Math.random() * totalWeight;
-            let winnerIdx = 0;
-            for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll <= 0) { winnerIdx = i; break; } }
-            const winnerTeam = [participants[winnerIdx]];
-            const loserTeam = participants.filter((_, i) => i !== winnerIdx);
-            const avgAttr = participants.reduce((s, w) => s + attrOf(w), 0) / participants.length;
-            const rawFloor = Math.round(avgAttr * 0.25);
-            const floor = Math.min(def.cap, rawFloor);
-            const spread = Math.min(def.cap - floor, Math.round(20 + avgAttr * 0.55));
-            let rating = Math.max(floor, Math.min(def.cap, floor + Math.round(Math.random() * spread) + 3)); // scrambles run a touch hotter
-            const specialty = slot.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === slot.specialtyId) : null;
-            if (specialty) rating = Math.min(def.cap, rating + specialty.ratingBonus);
-            let titleInfo = null;
-            if (slot.titleId) {
-              const title = titles.find((t) => t.id === slot.titleId);
-              if (title) {
-                const winnerNames = winnerTeam.map((w) => w.name);
-                const defended = title.holders.length > 0 && title.holders.every((h) => winnerNames.includes(h));
-                titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
-              }
-            }
-            return { slotKey: slot.key, slotLabel: def.label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod: pickWinMethod(winnerTeam) };
-          }
-          const team1 = slot.team1.filter(Boolean);
-          const team2 = slot.team2.filter(Boolean);
-          if (team1.length === 0 || team2.length === 0) return null;
-          const attr1 = teamAttr(team1);
-          const attr2 = teamAttr(team2);
-          // Gassed wrestlers perform worse — fatigue temporarily knocks down effective
-          // stats for this match (up to 40% at 0 energy), affecting both who wins and
-          // how good the match can possibly be.
-          const fatigueMult1 = 0.6 + 0.4 * (teamStat(team1, "eng") / 100);
-          const fatigueMult2 = 0.6 + 0.4 * (teamStat(team2, "eng") / 100);
-          const effAttr1 = attr1 * fatigueMult1;
-          const effAttr2 = attr2 * fatigueMult2;
-          const attrProb1 = effAttr1 / (effAttr1 + effAttr2);
-
-          const specialty = slot.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === slot.specialtyId) : null;
-          let prob1 = attrProb1;
-          if (specialty) {
-            const spec1 = teamStat(team1, specialty.statKey);
-            const spec2 = teamStat(team2, specialty.statKey);
-            const specProb1 = spec1 / (spec1 + spec2);
-            prob1 = attrProb1 * (1 - SPECIALTY_WEIGHT) + specProb1 * SPECIALTY_WEIGHT;
-          }
-          const winnerTeam = Math.random() < prob1 ? team1 : team2;
-          const loserTeam = winnerTeam === team1 ? team2 : team1;
-          const rawFloor = Math.round(((effAttr1 + effAttr2) / 2) * 0.25);
-          const floor = Math.min(def.cap, rawFloor);
-          const avgEffAttr = (effAttr1 + effAttr2) / 2;
-          const spread = Math.min(def.cap - floor, Math.round(20 + avgEffAttr * 0.55));
-          let rating = Math.max(floor, Math.min(def.cap, floor + Math.round(Math.random() * spread)));
-          if (specialty) rating = Math.min(def.cap, rating + specialty.ratingBonus);
-          // A clean Face vs Heel dynamic tells a better story than two of the same.
-          const aligns1 = new Set(team1.map((w) => w.alignment));
-          const aligns2 = new Set(team2.map((w) => w.alignment));
-          if (aligns1.size === 1 && aligns2.size === 1 && [...aligns1][0] !== [...aligns2][0]) {
-            rating = Math.min(def.cap, rating + 4);
-          }
-
-          // A booked-in rivalry pays off with a rating bump scaled to how heated it's gotten.
-          let storyKey = null;
-          if (team1.length === 1 && team2.length === 1 && team1[0].rivals.includes(team2[0].name) && team2[0].rivals.includes(team1[0].name)) {
-            storyKey = [team1[0].name, team2[0].name].sort().join("|");
-            const existing = storylines[storyKey] || { intensity: 20, matchesFought: 0 };
-            rating = Math.min(def.cap, rating + Math.round(existing.intensity / 10));
-          }
-          // Fans notice when you run the same match back over and over — a
-          // penalty that scales with how often this exact pairing has shown up
-          // in your recent shows, and fades away once you stop repeating it.
-          // An active rivalry gets it halved — building toward a blowoff is a
-          // real reason to run it back, not just repetition for its own sake.
-          const matchupKey = [...team1.map((w) => w.name), ...team2.map((w) => w.name)].sort().join("|");
-          const recentRepeats = recentMatchups.filter((k) => k === matchupKey).length;
-          if (recentRepeats > 0) {
-            const stalenessPenalty = Math.min(25, recentRepeats * 6);
-            rating = Math.max(floor, rating - (storyKey ? Math.round(stalenessPenalty / 2) : stalenessPenalty));
-          }
-          thisShowMatchupKeys.push(matchupKey);
-
-          let stableStoryKey = null;
-          if (team1.length === 2 && team2.length === 2) {
-            const s1 = stables.find((s) => s.members.length >= 2 && team1.every((w) => [s.members[0], s.members[1]].includes(w.name)));
-            const s2 = stables.find((s) => s.members.length >= 2 && team2.every((w) => [s.members[0], s.members[1]].includes(w.name)));
-            if (s1 && s2 && (s1.rivalStableIds || []).includes(s2.id) && (s2.rivalStableIds || []).includes(s1.id)) {
-              stableStoryKey = [s1.id, s2.id].sort().join("|");
-              const existing = stableStorylines[stableStoryKey] || { intensity: 20, matchesFought: 0 };
-              rating = Math.min(def.cap, rating + Math.round(existing.intensity / 10));
-            }
-          }
-
-          let titleInfo = null;
-          if (slot.titleId) {
-            const title = titles.find((t) => t.id === slot.titleId);
-            if (title) {
-              const winnerNames = winnerTeam.map((w) => w.name).sort();
-              const currentHolders = [...title.holders].sort();
-              const defended = title.holders.length > 0 && winnerNames.length === currentHolders.length && winnerNames.every((n, i) => n === currentHolders[i]);
-              titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
-            }
-          }
-          return { slotKey: slot.key, slotLabel: def.label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: slot.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod: pickWinMethod(winnerTeam) };
-        })
-        .filter(Boolean);
+      // Every segment already resolved incrementally as it was booked (see
+      // resolveSegmentResult) — Start Show just collects what's already
+      // decided, then recomputes which matches count toward the repeat-
+      // booking staleness check the same way the old code did (only plain
+      // 1v1/tag matches, never scrambles or segments).
+      const matches = segments.map((s) => s.result).filter(Boolean);
+      const thisShowMatchupKeys = matches
+        .filter((m) => m.format === "match" && !m.isMultiMan)
+        .map((m) => [...m.team1.map((w) => w.name), ...m.team2.map((w) => w.name)].sort().join("|"));
 
       const attendance = Math.max(0, Math.round(projectedAttendance * (0.9 + Math.random() * 0.2)));
       const revenue = attendance * ticketPrice;
@@ -1956,16 +2030,21 @@ export default function BookedRingsideEmpire() {
       const matchLikeRatings = matches.map((m) => m.rating);
       let fullRating = matchLikeRatings.length ? Math.round(matchLikeRatings.reduce((s, r) => s + r, 0) / matchLikeRatings.length) : 0;
 
-      // Once you're big enough, fans expect a full card — an incomplete show at
-      // National level or above costs you both rating and revenue.
-      const missingSlots = SLOT_DEFS.length - matches.length;
+      // Once you're big enough, fans expect a full card — a show that uses
+      // well under its time budget at National level or above costs you
+      // both rating and revenue, same spirit as the old missing-slots
+      // penalty (translated from slot count to minutes, since slots no
+      // longer exist) and the same maximum size (a totally empty card hits
+      // exactly as hard as 5 missing slots used to: -40 rating, -£3,750).
+      const usedShowMinutes = segments.filter((s) => s.result).reduce((sum, s) => sum + s.minutes, 0);
+      const shortfallFrac = Math.max(0, (arena.showMinutes - usedShowMinutes) / arena.showMinutes);
       let underbookedPenaltyNote = null;
-      if (missingSlots > 0 && TIER_RANK[popularityTier(popularity)] >= TIER_RANK.National) {
-        const ratingHit = missingSlots * 8;
-        const cashHit = missingSlots * 750;
+      if (shortfallFrac > 0 && TIER_RANK[popularityTier(popularity)] >= TIER_RANK.National) {
+        const ratingHit = Math.round(shortfallFrac * 40);
+        const cashHit = Math.round(shortfallFrac * 3750);
         fullRating = Math.max(0, fullRating - ratingHit);
         profit -= cashHit;
-        underbookedPenaltyNote = `Fans expected a full card at your level — ${missingSlots} empty slot${missingSlots === 1 ? "" : "s"} cost you £${cashHit.toLocaleString()} and knocked the show rating down.`;
+        underbookedPenaltyNote = `Fans expected a full ${arena.showMinutes}-minute card at your level — only using ${usedShowMinutes} min cost you £${cashHit.toLocaleString()} and knocked the show rating down.`;
       }
 
       // Merchandise — stock persists across shows rather than being bought fresh
@@ -2736,8 +2815,8 @@ export default function BookedRingsideEmpire() {
       }
       // Achievement-relevant records from this show — matches array is already
       // fresh/local here, so these can be set directly rather than via effect.
-      if (slots.some((s) => s.type === "fatal4")) setBookedFatal4Ever(true);
-      if (slots.some((s) => s.specialtyId === "cage")) setBookedCageEver(true);
+      if (segments.some((s) => s.type === "fatal4")) setBookedFatal4Ever(true);
+      if (segments.some((s) => s.specialtyId === "cage")) setBookedCageEver(true);
       setMaxAttendanceEver((prev) => Math.max(prev, attendance));
       setMaxShowRatingEver((prev) => Math.max(prev, fullRating));
       if (attendance >= arena.crowdMax) setHasSoldOutEver(true);
@@ -2759,7 +2838,7 @@ export default function BookedRingsideEmpire() {
   };
 
   const resetShow = () => {
-    setSlots(SLOT_DEFS.map((d) => ({ key: d.key, format: "match", type: "singles", team1: [null, null, null, null], team2: [null, null], titleId: null, specialtyId: null })));
+    setSegments([]);
     setShowResult(null);
     setCity(null);
   };
@@ -2832,7 +2911,7 @@ export default function BookedRingsideEmpire() {
     setMerchStock(s.merchStock || 0); setMerchQualityTier(s.merchQualityTier || 0); setWrestlerMerchSales(s.wrestlerMerchSales || {});
     setRecentMatchups(s.recentMatchups || []);
     setArenaIdx(1); setCity(null);
-    setSlots(SLOT_DEFS.map((d) => ({ key: d.key, format: "match", type: "singles", team1: [null, null, null, null], team2: [null, null], titleId: null, specialtyId: null })));
+    setSegments([]);
     setShowResult(null); setGameOver(false); setTab("company");
   };
 
@@ -3057,7 +3136,7 @@ export default function BookedRingsideEmpire() {
     setStartingCity(null);
     setMerchStock(0); setMerchQualityTier(0); setWrestlerMerchSales({});
     setRecentMatchups([]);
-    setSlots(SLOT_DEFS.map((d) => ({ key: d.key, format: "match", type: "singles", team1: [null, null, null, null], team2: [null, null], titleId: null, specialtyId: null })));
+    setSegments([]);
     setNotes("");
     setTab("company");
     setGameOver(false);
@@ -4440,6 +4519,16 @@ export default function BookedRingsideEmpire() {
                   Main Event draw: <span className={mainDrawAvg >= 60 ? "text-green-400" : mainDrawAvg <= 40 ? "text-red-400" : "text-[#F2ECDD]"}>{Math.round(mainDrawAvg)}/100</span> — {mainDrawAvg >= 60 ? "pulling the crowd up" : mainDrawAvg <= 40 ? "dragging the crowd down" : "roughly neutral"}
                 </div>
               )}
+              <div className="mt-3">
+                <div className="flex justify-between text-[10px] text-[#8B8593] mb-1">
+                  <span>SHOW TIME</span>
+                  <span className={totalShowMinutes > arena.showMinutes ? "text-red-400 font-bold" : "text-[#F2ECDD] font-bold"}>{totalShowMinutes} / {arena.showMinutes} min</span>
+                </div>
+                <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
+                  <div className="h-full" style={{ width: `${Math.min(100, (totalShowMinutes / arena.showMinutes) * 100)}%`, backgroundColor: totalShowMinutes > arena.showMinutes ? "#EF4444" : "#8B6BC0" }} />
+                </div>
+                {totalShowMinutes > arena.showMinutes && <div className="text-[9px] text-red-400 mt-1">Over the venue's time budget — trim a segment's minutes or remove one.</div>}
+              </div>
             </div>
 
             <div>
@@ -4452,8 +4541,9 @@ export default function BookedRingsideEmpire() {
                 )}
               </div>
               <div className="space-y-2">
-                {slots.map((slot) => {
-                  const def = SLOT_DEFS.find((d) => d.key === slot.key);
+                {segments.map((slot, segIndex) => {
+                  const cap = computeSegmentCap(segIndex, segments.length, slot.minutes);
+                  const label = segmentLabel(segIndex, segments.length);
                   const eligibleTitles = titles.filter((title) => {
                     if (slot.format !== "match") return false;
                     const isMultiMan = slot.type === "triple" || slot.type === "fatal4";
@@ -4487,33 +4577,39 @@ export default function BookedRingsideEmpire() {
                     return stablemates.length > 0 ? stablemates : bookable;
                   };
                   return (
-                    <div key={slot.key} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3 space-y-2">
+                    <div key={slot.id} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3 space-y-2">
                       <div className="flex items-center justify-between flex-wrap gap-1">
-                        <span className="text-[10px] text-[#8B8593] font-bold tracking-wide">{def.label.toUpperCase()} <span className="text-[#8B6BC0]">(cap {def.cap})</span></span>
-                        <div className="flex gap-1">
-                          {["match", "segment"].map((f) => (
-                            <button key={f} onClick={() => setSlotFormat(slot.key, f)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${slot.format === f ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={slot.format === f ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
-                              {f === "match" ? "Match" : "Segment"}
-                            </button>
-                          ))}
-                          {slot.format === "match" && ["singles", "tag", "triple", "fatal4"].map((t) => (
-                            <button key={t} onClick={() => setSlotType(slot.key, t)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${slot.type === t ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={slot.type === t ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
-                              {t === "singles" ? "1v1" : t === "tag" ? "2v2" : t === "triple" ? "Triple Threat" : "Fatal 4-Way"}
-                            </button>
-                          ))}
+                        <span className="text-[10px] text-[#8B8593] font-bold tracking-wide">{label.toUpperCase()} <span className="text-[#8B6BC0]">(cap {cap})</span></span>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => setSegmentMinutes(slot.id, slot.minutes - 1)} className="w-5 h-5 flex items-center justify-center rounded border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]">−</button>
+                          <span className="text-[9px] text-[#8B8593] w-12 text-center">{slot.minutes} min</span>
+                          <button onClick={() => setSegmentMinutes(slot.id, slot.minutes + 1)} className="w-5 h-5 flex items-center justify-center rounded border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]">+</button>
+                          <button onClick={() => removeSegment(slot.id)} className="ml-1 text-[#8B8593] hover:text-red-400"><X size={14} /></button>
                         </div>
+                      </div>
+                      <div className="flex gap-1 flex-wrap">
+                        {["match", "segment"].map((f) => (
+                          <button key={f} onClick={() => setSegmentFormat(slot.id, f)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${slot.format === f ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={slot.format === f ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
+                            {f === "match" ? "Match" : "Segment"}
+                          </button>
+                        ))}
+                        {slot.format === "match" && ["singles", "tag", "triple", "fatal4"].map((t) => (
+                          <button key={t} onClick={() => setSegmentType(slot.id, t)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${slot.type === t ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={slot.type === t ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
+                            {t === "singles" ? "1v1" : t === "tag" ? "2v2" : t === "triple" ? "Triple Threat" : "Fatal 4-Way"}
+                          </button>
+                        ))}
                       </div>
 
                       {slot.format === "segment" ? (
                         <div>
-                          <select value={slot.team1[0]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team1", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                          <select value={slot.team1[0]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team1", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                             <option value="">Select performer...</option>
                             {bookable.map((w) => (
                               <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[0]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
                             ))}
                           </select>
                           {slot.team1[0] && <div className="text-[9px] text-[#8B8593] mt-1">ATTR {Math.round(attrOf(slot.team1[0]))} &middot; CHA {slot.team1[0].cha}/100 &middot; {effectiveTier(slot.team1[0])} &middot; <span className={slot.team1[0].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team1[0].alignment}</span> &middot; STA {slot.team1[0].eng}/100</div>}
-                          <select value={slot.team2?.[0]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team2", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mt-1.5">
+                          <select value={slot.team2?.[0]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team2", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mt-1.5">
                             <option value="">No subject — general promo</option>
                             {bookable.filter((w) => w.name !== slot.team1[0]?.name).map((w) => (
                               <option key={w.name} value={w.name}>{wrestlerOptionLabel(w)}{w.rivals.includes(slot.team1[0]?.name) ? " (existing rival)" : ""}</option>
@@ -4526,7 +4622,7 @@ export default function BookedRingsideEmpire() {
                           <div className="space-y-1">
                             {(slot.type === "triple" ? [0, 1, 2] : [0, 1, 2, 3]).map((idx) => (
                               <div key={idx}>
-                                <select value={slot.team1[idx]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team1", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                                <select value={slot.team1[idx]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team1", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                                   <option value="">Select wrestler...</option>
                                   {bookable.map((w) => (
                                     <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[idx]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
@@ -4540,7 +4636,7 @@ export default function BookedRingsideEmpire() {
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
                               <Award size={12} className="text-[#8B6BC0] shrink-0" />
-                              <select value={slot.titleId || ""} onChange={(e) => setSlotTitle(slot.key, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
+                              <select value={slot.titleId || ""} onChange={(e) => setSegmentTitle(slot.id, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
                                 <option value="">Non-title match</option>
                                 {eligibleTitles.map((title) => (
                                   <option key={title.id} value={title.id}>{title.name} {title.holders.length === 0 ? "(vacant)" : `(defending: ${title.holders.join(" & ")})`}</option>
@@ -4550,7 +4646,7 @@ export default function BookedRingsideEmpire() {
                           )}
                           <div className="flex items-center gap-2">
                             <Zap size={12} className="text-[#8B6BC0] shrink-0" />
-                            <select value={slot.specialtyId || ""} onChange={(e) => setSlotSpecialty(slot.key, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
+                            <select value={slot.specialtyId || ""} onChange={(e) => setSegmentSpecialty(slot.id, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
                               <option value="">Standard match</option>
                               {eligibleSpecialties.map((s) => (
                                 <option key={s.id} value={s.id}>{s.name} &middot; £{s.cost.toLocaleString()} &middot; +{s.ratingBonus} rtg &middot; {STAT_LABELS[s.statKey]}</option>
@@ -4566,7 +4662,7 @@ export default function BookedRingsideEmpire() {
                                 const options = idx === 1 ? partnerOptions("team1") : bookable;
                                 return (
                                 <div key={idx}>
-                                  <select value={slot.team1[idx]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team1", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                                  <select value={slot.team1[idx]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team1", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                                     <option value="">Select wrestler...</option>
                                     {options.map((w) => (
                                       <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team1[idx]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
@@ -4584,7 +4680,7 @@ export default function BookedRingsideEmpire() {
                                 const options = idx === 1 ? partnerOptions("team2") : bookable;
                                 return (
                                 <div key={idx}>
-                                  <select value={slot.team2[idx]?.name || ""} onChange={(e) => setSlotMember(slot.key, "team2", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                                  <select value={slot.team2[idx]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team2", idx, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
                                     <option value="">Select wrestler...</option>
                                     {options.map((w) => (
                                       <option key={w.name} value={w.name} disabled={usedNames.has(w.name) && slot.team2[idx]?.name !== w.name}>{wrestlerOptionLabel(w)}</option>
@@ -4626,7 +4722,7 @@ export default function BookedRingsideEmpire() {
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
                               <Award size={12} className="text-[#8B6BC0] shrink-0" />
-                              <select value={slot.titleId || ""} onChange={(e) => setSlotTitle(slot.key, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
+                              <select value={slot.titleId || ""} onChange={(e) => setSegmentTitle(slot.id, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
                                 <option value="">Non-title match</option>
                                 {eligibleTitles.map((title) => (
                                   <option key={title.id} value={title.id}>{title.name} {title.holders.length === 0 ? "(vacant)" : `(defending: ${title.holders.join(" & ")})`}</option>
@@ -4643,7 +4739,7 @@ export default function BookedRingsideEmpire() {
                           })()}
                           <div className="flex items-center gap-2">
                             <Zap size={12} className="text-[#8B6BC0] shrink-0" />
-                            <select value={slot.specialtyId || ""} onChange={(e) => setSlotSpecialty(slot.key, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
+                            <select value={slot.specialtyId || ""} onChange={(e) => setSegmentSpecialty(slot.id, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
                               <option value="">Standard match</option>
                               {eligibleSpecialties.map((s) => (
                                 <option key={s.id} value={s.id}>{s.name} &middot; £{s.cost.toLocaleString()} &middot; +{s.ratingBonus} rtg &middot; {STAT_LABELS[s.statKey]}</option>
@@ -4652,22 +4748,56 @@ export default function BookedRingsideEmpire() {
                           </div>
                         </>
                       )}
+
+                      {slot.result && (
+                        <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-2.5">
+                          <div className="text-[9px] text-[#8B8593] mb-1 flex items-center gap-1"><Check size={11} className="text-[#8B6BC0]" /> RESOLVED {slot.result.specialty ? `· ${slot.result.specialty.name.toUpperCase()}` : ""}{slot.result.winMethod ? ` · VIA ${slot.result.winMethod.toUpperCase()}` : ""}</div>
+                          {slot.result.format === "segment" ? (
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-[#F2ECDD]">{slot.result.performer.name} cuts a promo{slot.result.subject ? <span className="font-normal text-[#8B8593]"> aimed at {slot.result.subject.name}</span> : ""}</span>
+                              <div className="flex items-center gap-1.5 text-[10px] text-[#8B8593]"><Star size={11} className="text-[#8B6BC0]" /> {slot.result.rating}</div>
+                            </div>
+                          ) : slot.result.isMultiMan ? (
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs flex flex-wrap gap-x-1.5">
+                                {slot.result.team1.map((w, wi) => (
+                                  <span key={w.name} className={slot.result.winnerTeam[0].name === w.name ? "text-[#F2ECDD] font-bold" : "text-[#8B8593] line-through"}>
+                                    {w.name}{wi < slot.result.team1.length - 1 ? "," : ""}
+                                  </span>
+                                ))}
+                              </div>
+                              <div className="flex items-center gap-1.5 text-[10px] text-[#8B8593]"><Star size={11} className="text-[#8B6BC0]" /> {slot.result.rating}</div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between">
+                              <div className="text-xs">
+                                <span className={slot.result.winnerTeam === slot.result.team1 ? "text-[#F2ECDD] font-bold" : "text-[#8B8593] line-through"}>{slot.result.team1.map((w) => w.name).join(" & ")}</span>
+                                <span className="text-[#8B6BC0] mx-2">vs</span>
+                                <span className={slot.result.winnerTeam === slot.result.team2 ? "text-[#F2ECDD] font-bold" : "text-[#8B8593] line-through"}>{slot.result.team2.map((w) => w.name).join(" & ")}</span>
+                              </div>
+                              <div className="flex items-center gap-1.5 text-[10px] text-[#8B8593]"><Star size={11} className="text-[#8B6BC0]" /> {slot.result.rating}</div>
+                            </div>
+                          )}
+                          {slot.result.titleInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={11} /> {slot.result.titleInfo.name} &mdash; {slot.result.titleInfo.label}</div>}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
+              <div className="flex gap-2 mt-2">
+                <button onClick={() => addSegment("match")} className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#17151C] rounded-lg">
+                  <Plus size={13} /> Add Match
+                </button>
+                <button onClick={() => addSegment("segment")} className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#17151C] rounded-lg">
+                  <Plus size={13} /> Add Angle
+                </button>
+              </div>
             </div>
 
             {(() => {
-              const filledSlotCount = slots.filter((s) => {
-                if (s.format === "segment") return !!s.team1[0];
-                if (s.type === "triple") return s.team1.filter(Boolean).length >= 3;
-                if (s.type === "fatal4") return s.team1.filter(Boolean).length >= 4;
-                return s.team1.filter(Boolean).length > 0 && s.team2.filter(Boolean).length > 0;
-              }).length;
-              const missing = SLOT_DEFS.length - filledSlotCount;
-              if (missing <= 0 || TIER_RANK[popularityTier(popularity)] < TIER_RANK.National) return null;
-              return <div className="text-[10px] text-red-300 mb-2">Fans at your level expect a full card — {missing} empty slot{missing === 1 ? "" : "s"} will cost you rating and money.</div>;
+              if (totalShowMinutes >= arena.showMinutes || TIER_RANK[popularityTier(popularity)] < TIER_RANK.National) return null;
+              return <div className="text-[10px] text-red-300 mb-2">Fans at your level expect a full card — only using {totalShowMinutes} of {arena.showMinutes} min will cost you rating and money.</div>;
             })()}
             {runShowError && (
               <div className="bg-[#2A1414] border border-red-500 rounded-lg p-3 text-xs mb-2">
