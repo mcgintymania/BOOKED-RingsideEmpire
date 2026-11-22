@@ -288,8 +288,16 @@ const RIVAL_COMPANIES = [
 // Starting funds scale with reputation, roughly halving each rank down — the
 // #1 International promotion opens with £1m, the smallest with £25k.
 const RIVAL_STARTING_FUNDS = [1000000, 600000, 400000, 250000, 150000, 90000, 50000, 25000];
-const BOOKER_FIRST = ["Morgan", "Casey", "Reese", "Jordan", "Avery", "Devon", "Quinn", "Harper"];
-const BOOKER_LAST = ["Whitfield", "Doyle", "Blackburn", "Sharpe", "Callahan", "Mercer", "Ashby", "Konig"];
+const BOOKER_FIRST = [
+  "Morgan", "Casey", "Reese", "Jordan", "Avery", "Devon", "Quinn", "Harper",
+  "Riley", "Dakota", "Sawyer", "Emerson", "Rowan", "Shay", "Teagan", "Blair",
+  "Marlowe", "Sloane", "Kieran", "Ellison",
+];
+const BOOKER_LAST = [
+  "Whitfield", "Doyle", "Blackburn", "Sharpe", "Callahan", "Mercer", "Ashby", "Konig",
+  "Harlow", "Bellamy", "Crowther", "Delacroix", "Fairweather", "Granger", "Holloway", "Insley",
+  "Kirkland", "Lassiter", "Monroe", "Prescott",
+];
 function randomBookerName() {
   return `${BOOKER_FIRST[rand(0, BOOKER_FIRST.length - 1)]} ${BOOKER_LAST[rand(0, BOOKER_LAST.length - 1)]}`;
 }
@@ -320,9 +328,25 @@ function staffWeeklyWage(skill) {
   if (skill <= 80) return 2500;
   return 4000;
 }
-function generateStaffCandidate(role) {
+// usedNames lets callers avoid landing two candidates with the same name —
+// pass the names already in the pool (or already picked this batch). Retries
+// a bounded number of times, then falls back to a numbered variant so this
+// can never loop forever even if the whole 400-combination pool is taken.
+function generateStaffCandidate(role, usedNames = new Set()) {
+  let name = randomBookerName();
+  let guard = 0;
+  while (usedNames.has(name) && guard < 30) { name = randomBookerName(); guard++; }
+  if (usedNames.has(name)) name = `${name} ${toRomanNumeral(guard + 1)}`;
   const skill = rand(20, 85);
-  return { id: `staff-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: randomBookerName(), role, skill, contractedTo: null, contractExpiresWeek: null };
+  return { id: `staff-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name, role, skill, contractedTo: null, contractExpiresWeek: null };
+}
+function buildStaffPool() {
+  const usedNames = new Set();
+  return STAFF_ROLES.flatMap((r) => Array.from({ length: STAFF_POOL_SIZE_PER_ROLE }, () => {
+    const candidate = generateStaffCandidate(r.key, usedNames);
+    usedNames.add(candidate.name);
+    return candidate;
+  }));
 }
 
 // World Editor — lightweight CSV in/out, no external library. Handles quoted
@@ -1594,7 +1618,7 @@ export default function BookedRingsideEmpire() {
   const [workingAgreements, setWorkingAgreements] = useState([]); // rival company ids
   const [feederCompany, setFeederCompany] = useState(null); // { name, foundedWeek }
   const [newFeederName, setNewFeederName] = useState("");
-  const [staffPool, setStaffPool] = useState(() => STAFF_ROLES.flatMap((r) => Array.from({ length: STAFF_POOL_SIZE_PER_ROLE }, () => generateStaffCandidate(r.key))));
+  const [staffPool, setStaffPool] = useState(() => buildStaffPool());
   const [staffSubTab, setStaffSubTab] = useState("agent");
   const [hiringStaffTarget, setHiringStaffTarget] = useState(null);
   const [staffHireWeeks, setStaffHireWeeks] = useState(26);
@@ -3530,7 +3554,7 @@ export default function BookedRingsideEmpire() {
           const idx = sp.findIndex((s) => s.contractedTo !== "player");
           if (idx === -1) return sp;
           const replaced = [...sp];
-          replaced[idx] = generateStaffCandidate(sp[idx].role);
+          replaced[idx] = generateStaffCandidate(sp[idx].role, new Set(sp.map((s) => s.name)));
           return replaced;
         });
       }
@@ -3628,7 +3652,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates(s.eventTemplates || []);
     setWorkingAgreements(s.workingAgreements || []);
     setFeederCompany(s.feederCompany || null);
-    setStaffPool(s.staffPool || STAFF_ROLES.flatMap((r) => Array.from({ length: STAFF_POOL_SIZE_PER_ROLE }, () => generateStaffCandidate(r.key))));
+    setStaffPool(s.staffPool || buildStaffPool());
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setShowResult(null); setGameOver(false); setTab("company");
@@ -3873,7 +3897,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates([]);
     setWorkingAgreements([]);
     setFeederCompany(null);
-    setStaffPool(STAFF_ROLES.flatMap((r) => Array.from({ length: STAFF_POOL_SIZE_PER_ROLE }, () => generateStaffCandidate(r.key))));
+    setStaffPool(buildStaffPool());
     setSegments([]);
     setNotes("");
     setTab("company");
