@@ -1167,6 +1167,20 @@ const PRODUCTION_TIERS = [
   { name: "Spectacle", cost: 200000, upkeep: 900, ratingBonus: 9, tvMult: 1.45 },
 ];
 
+// Advertising — a proactive, per-show spend rather than a passive growth
+// stat. Unlike Staff/Production (what happens once you're in the building),
+// this is about getting people to actually show up and hear about you in
+// the first place: posters/flyers, a local TV spot, or a social media
+// push. Chosen fresh per show (same lifecycle as ticket price — resets to
+// "None" whenever a new scheduled show comes due), it boosts both this
+// show's attendance and how much this show grows the city's popularity.
+const AD_CAMPAIGNS = [
+  { key: "none", label: "None", cost: 0, attendanceMult: 1, popularityMult: 1 },
+  { key: "posters", label: "Posters & Flyers", cost: 150, attendanceMult: 1.06, popularityMult: 1.1 },
+  { key: "tv", label: "TV Spot", cost: 600, attendanceMult: 1.15, popularityMult: 1.25 },
+  { key: "social", label: "Social Media Blitz", cost: 1200, attendanceMult: 1.25, popularityMult: 1.4 },
+];
+
 // Speciality Matches — gated by company level, cost extra to book, and boost the
 // rating ceiling. Each type is driven by whichever stat fits it best, blended into
 // the win probability alongside overall ATTR — so a specialist can upset a bigger
@@ -1803,6 +1817,8 @@ export default function BookedRingsideEmpire() {
   const [arenaIdx, setArenaIdx] = useState(0);
   const arena = ARENAS[arenaIdx];
   const [ticketPrice, setTicketPrice] = useState(arena.ticketMin);
+  const [adCampaign, setAdCampaign] = useState("none");
+  const activeAdCampaign = AD_CAMPAIGNS.find((a) => a.key === adCampaign) || AD_CAMPAIGNS[0];
   // Show length defaults to the venue's typical runtime but is always the
   // player's call — a quick house show at a big arena, or a long flagship
   // card at a small one, are both legitimate choices. SHOW_MINUTES_MIN/MAX
@@ -1914,6 +1930,7 @@ export default function BookedRingsideEmpire() {
     setShowLevel(newTemplateLevel);
     setArenaIdx(newTemplateArenaIdx);
     setTicketPrice(ARENAS[newTemplateArenaIdx].ticketMin);
+    setAdCampaign("none");
     setShowMinutesTarget(newTemplateShowMinutes);
     setCity(newTemplatePreferredCity);
     setNewTemplateName(""); setNewTemplateLevel("main"); setNewTemplateArenaIdx(0); setNewTemplateIntervalWeeks(1);
@@ -2696,7 +2713,7 @@ export default function BookedRingsideEmpire() {
   // Touring abroad costs real money to actually get there — flights, freight,
   // customs — on top of whatever the venue itself costs.
   const travelSurcharge = FOREIGN_CITIES.includes(city) ? Math.round(arena.cost * FOREIGN_TRAVEL_SURCHARGE_FRAC) : 0;
-  const projectedShowCost = arena.cost + travelSurcharge + projectedSpecialtyCost + projectedFreelanceCost;
+  const projectedShowCost = arena.cost + travelSurcharge + activeAdCampaign.cost + projectedSpecialtyCost + projectedFreelanceCost;
 
   const cityPop = city ? cityPopularity[city] : popularity;
   // Price always thins the crowd (multiplicative, so it matters at any popularity level),
@@ -2710,7 +2727,7 @@ export default function BookedRingsideEmpire() {
   const mainDrawAvg = mainDrawParticipants.length ? mainDrawParticipants.reduce((s, w) => s + (w.drawPower ?? 50), 0) / mainDrawParticipants.length : 50;
   const drawFactor = 1 + ((mainDrawAvg - 50) / 100) * 0.5;
   const baseFrac = 0.1 + (cityPop / 100) * 0.85; // 0.1 floor rising to 0.95 ceiling as score climbs
-  const demandFrac = Math.max(0.05, Math.min(1, baseFrac * priceMultiplier * drawFactor));
+  const demandFrac = Math.max(0.05, Math.min(1, baseFrac * priceMultiplier * drawFactor * activeAdCampaign.attendanceMult));
   const projectedAttendance = Math.round(arena.crowdMin + (arena.crowdMax - arena.crowdMin) * demandFrac);
 
   // skipShow advances a week with no show booked — used by the Calendar's
@@ -2770,7 +2787,7 @@ export default function BookedRingsideEmpire() {
       const sponsorIncome = sponsorActive ? sponsorDeal.weeklyPay : 0;
 
       const loanPayment = loan ? loan.weeklyPayment : 0;
-      let profit = revenue - (showRan ? arena.cost + travelSurcharge : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll - productionWeeklyUpkeep + news.amount + networkIncome + sponsorIncome;
+      let profit = revenue - (showRan ? arena.cost + travelSurcharge + activeAdCampaign.cost : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll - productionWeeklyUpkeep + news.amount + networkIncome + sponsorIncome;
       const matchLikeRatings = matches.map((m) => m.rating);
       let fullRating = matchLikeRatings.length ? Math.round(matchLikeRatings.reduce((s, r) => s + r, 0) / matchLikeRatings.length) : 0;
 
@@ -2850,7 +2867,7 @@ export default function BookedRingsideEmpire() {
       // way (good or bad), and no city "visit" gets recorded.
       if (showRan) {
         const breakEvenRating = clamp(10 + cityPopularity[city] * 0.3, 10, 35);
-        const rawCityDelta = 1 + (fullRating - breakEvenRating) * 0.08 + (networkActive ? NETWORK_POPULARITY_BOOST : 0);
+        const rawCityDelta = (1 + (fullRating - breakEvenRating) * 0.08 + (networkActive ? NETWORK_POPULARITY_BOOST : 0)) * activeAdCampaign.popularityMult;
         const growthDampener = clamp(1 - Math.floor(cityPopularity[city] / 10) * 0.07, 0.3, 1);
         const growthScale = rawCityDelta > 0 ? growthDampener * rosterQualityMult : growthDampener;
         const newCityPop = clamp(cityPopularity[city] + rawCityDelta * growthScale, 0, 100);
@@ -3750,7 +3767,7 @@ export default function BookedRingsideEmpire() {
         return next;
       });
 
-      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, travelSurcharge, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
+      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, travelSurcharge, adCost: activeAdCampaign.cost, adCampaignLabel: activeAdCampaign.key !== "none" ? activeAdCampaign.label : null, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
       if (record) setShowHistory((h) => [record, ...h].slice(0, 60));
       if (thisShowMatchupKeys.length > 0) {
         setRecentMatchups((prev) => [...thisShowMatchupKeys, ...prev].slice(0, 30));
@@ -4102,6 +4119,7 @@ export default function BookedRingsideEmpire() {
       setShowLevel(due.level);
       setArenaIdx(due.arenaIdx);
       setTicketPrice(ARENAS[due.arenaIdx].ticketMin);
+      setAdCampaign("none");
       setShowMinutesTarget(due.showMinutes || ARENAS[due.arenaIdx].showMinutes);
       setCity(due.preferredCity || startingCity);
     }
@@ -6067,6 +6085,19 @@ export default function BookedRingsideEmpire() {
                 <div className="flex justify-between text-[10px] text-[#8B8593] mb-1"><span>TICKET PRICE</span><span className="text-[#F2ECDD] font-bold">£{ticketPrice}</span></div>
                 <input type="range" min={arena.ticketMin} max={arena.ticketMax} value={ticketPrice} onChange={(e) => setTicketPrice(Number(e.target.value))} className="w-full accent-[#8B6BC0]" />
               </div>
+              <div className="mt-3">
+                <div className="text-[10px] text-[#8B8593] mb-1">ADVERTISING</div>
+                <div className="flex gap-1 flex-wrap">
+                  {AD_CAMPAIGNS.map((camp) => (
+                    <button key={camp.key} onClick={() => setAdCampaign(camp.key)} className={`px-2 py-1 rounded text-[9px] font-bold border ${adCampaign === camp.key ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={adCampaign === camp.key ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
+                      {camp.label}{camp.cost > 0 ? ` · £${camp.cost.toLocaleString()}` : ""}
+                    </button>
+                  ))}
+                </div>
+                {activeAdCampaign.key !== "none" && (
+                  <div className="text-[9px] text-[#8B8593] italic mt-1">+{Math.round((activeAdCampaign.attendanceMult - 1) * 100)}% attendance, +{Math.round((activeAdCampaign.popularityMult - 1) * 100)}% popularity growth from this show.</div>
+                )}
+              </div>
             </div>
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
               {popularity >= MERCH_UNLOCK_POPULARITY && (
@@ -6434,6 +6465,7 @@ export default function BookedRingsideEmpire() {
                   <div className="space-y-1.5 text-[11px]">
                     <div className="flex justify-between"><span className="text-[#8B8593]">Venue booking</span><span className="font-bold">£{arena.cost.toLocaleString()}</span></div>
                     {travelSurcharge > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Travel ({FOREIGN_CITY_COUNTRY[city]})</span><span className="font-bold">£{travelSurcharge.toLocaleString()}</span></div>}
+                    {activeAdCampaign.cost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Advertising</span><span className="font-bold">£{activeAdCampaign.cost.toLocaleString()}</span></div>}
                     {projectedSpecialtyCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Specialty matches</span><span className="font-bold">£{projectedSpecialtyCost.toLocaleString()}</span></div>}
                     {projectedFreelanceCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Freelancer fees</span><span className="font-bold">£{projectedFreelanceCost.toLocaleString()}</span></div>}
                     <div className="flex justify-between pt-1.5 border-t border-[#2B2733]"><span className="text-[#8B6BC0] font-bold">Show total</span><span className="font-bold text-[#8B6BC0]">£{projectedShowCost.toLocaleString()}</span></div>
@@ -6514,6 +6546,7 @@ export default function BookedRingsideEmpire() {
               <div><span className="text-[#8B8593]">Talent Pay</span><div className="font-bold">£{showResult.wrestlerPay.toLocaleString()}</div></div>
               {showResult.specialtyCost > 0 && <div><span className="text-[#8B8593]">Speciality Costs</span><div className="font-bold">£{showResult.specialtyCost.toLocaleString()}</div></div>}
               {showResult.travelSurcharge > 0 && <div><span className="text-[#8B8593]">Travel Costs</span><div className="font-bold">£{showResult.travelSurcharge.toLocaleString()}</div></div>}
+              {showResult.adCost > 0 && <div><span className="text-[#8B8593]">Advertising ({showResult.adCampaignLabel})</span><div className="font-bold">£{showResult.adCost.toLocaleString()}</div></div>}
               {showResult.loanPayment > 0 && <div><span className="text-[#8B8593]">Loan Repayment</span><div className="font-bold">£{showResult.loanPayment.toLocaleString()}</div></div>}
               {showResult.networkIncome > 0 && <div><span className="text-[#8B8593]">TV Income</span><div className="font-bold text-[#8B6BC0]">+£{showResult.networkIncome.toLocaleString()}</div></div>}
               {showResult.sponsorIncome > 0 && <div><span className="text-[#8B8593]">Sponsor Income</span><div className="font-bold text-[#8B6BC0]">+£{showResult.sponsorIncome.toLocaleString()}</div></div>}
