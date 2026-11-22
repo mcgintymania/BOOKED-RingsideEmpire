@@ -1301,6 +1301,7 @@ const SIDEBAR_SECTIONS = [
     title: "Your Promotion",
     items: [
       { key: "roster", label: "Roster", icon: Users },
+      { key: "storylines", label: "Storylines", icon: Flame },
       { key: "book", label: "Book", icon: Ticket },
       { key: "titles", label: "Titles", icon: Award },
       { key: "deals", label: "Deals", icon: Tv },
@@ -3065,6 +3066,149 @@ export default function BookedRingsideEmpire() {
   const yearsAvailable = [...new Set(financeHistory.map((f) => f.year))];
   const financeChartData = financeHistory.filter((f) => f.year === financeYear);
 
+  // Shared between Roster > Rivalries (full management: create/remove) and the
+  // standalone Storylines screen (overview only) — same data, same cards,
+  // just whether the create-rivalry controls show. Mirrors the existing
+  // renderTagTeamsPanel(onlyMine) pattern just below.
+  const renderRivalriesPanel = (showCreateControls) => (
+    <div>
+      <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">ACTIVE RIVALRIES</div>
+      <div className="text-[10px] text-[#8B8593] mb-3">Book two rivals against each other for a rating boost — keep it up and the feud can blow off into a big payoff match. They also form on their own from locker-room news.</div>
+
+      {showCreateControls && (
+        !creatingRivalry ? (
+          <button onClick={() => setCreatingRivalry(true)} className="w-full flex items-center justify-center gap-1.5 py-2.5 mb-3 text-xs font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#17151C] rounded-lg">
+            <Plus size={13} /> Create Rivalry
+          </button>
+        ) : (
+          <div className="bg-[#17151C] border border-[#5B3B8C] rounded-lg p-4 space-y-3 mb-3">
+            <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">NEW RIVALRY</div>
+            <div className="flex gap-2">
+              {["singles", "tag"].map((t) => (
+                <button key={t} onClick={() => { setNewRivalryType(t); setNewRivalryA(""); setNewRivalryB(""); }} className={`px-3 py-1.5 rounded text-[11px] font-bold border ${newRivalryType === t ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`} style={newRivalryType === t ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C", color: "#F2ECDD" } : undefined}>
+                  {t === "singles" ? "Singles" : "Tag Team"}
+                </button>
+              ))}
+            </div>
+            {newRivalryType === "singles" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <select value={newRivalryA} onChange={(e) => setNewRivalryA(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                  <option value="">Wrestler A...</option>
+                  {bookable.map((w) => <option key={w.name} value={w.name} disabled={w.name === newRivalryB}>{w.name}</option>)}
+                </select>
+                <select value={newRivalryB} onChange={(e) => setNewRivalryB(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                  <option value="">Wrestler B...</option>
+                  {bookable.map((w) => <option key={w.name} value={w.name} disabled={w.name === newRivalryA}>{w.name}</option>)}
+                </select>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <select value={newRivalryA} onChange={(e) => setNewRivalryA(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                  <option value="">Tag team A...</option>
+                  {stables.map((s) => <option key={s.id} value={s.id} disabled={s.id === newRivalryB}>{s.name}</option>)}
+                </select>
+                <select value={newRivalryB} onChange={(e) => setNewRivalryB(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
+                  <option value="">Tag team B...</option>
+                  {stables.map((s) => <option key={s.id} value={s.id} disabled={s.id === newRivalryA}>{s.name}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={confirmCreateRivalry} disabled={!newRivalryA || !newRivalryB} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
+                Create
+              </button>
+              <button onClick={() => { setCreatingRivalry(false); setNewRivalryA(""); setNewRivalryB(""); }} className="px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Cancel</button>
+            </div>
+          </div>
+        )
+      )}
+
+      <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">SINGLES</div>
+      <div className="space-y-2 mb-4">
+        {(() => {
+          const yourNames = new Set([...roster, ...perUseWrestlers].map((w) => w.name));
+          const seen = new Set();
+          const rivalryList = [];
+          pool.forEach((w) => {
+            if (!yourNames.has(w.name)) return;
+            w.rivals.forEach((otherName) => {
+              const other = pool.find((x) => x.name === otherName);
+              if (!other || !other.rivals.includes(w.name)) return;
+              const key = [w.name, otherName].sort().join("|");
+              if (seen.has(key)) return;
+              seen.add(key);
+              const story = storylines[key] || { intensity: 20, matchesFought: 0 };
+              rivalryList.push({ key, a: w.name, b: otherName, intensity: story.intensity, matchesFought: story.matchesFought });
+            });
+          });
+          rivalryList.sort((x, y) => y.intensity - x.intensity);
+          if (rivalryList.length === 0) return <div className="text-xs text-[#8B8593] italic">None involving your wrestlers yet.</div>;
+          return rivalryList.map((r) => {
+            const stage = feudStage(r.intensity);
+            const readyToBlow = stage.label === "Ready to Blow Off";
+            return (
+              <div key={r.key} className="bg-[#17151C] rounded-lg p-3" style={{ border: `1px solid ${readyToBlow ? "#C9A227" : "#2B2733"}` }}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-bold text-sm flex items-center gap-1.5">{readyToBlow && <Flame size={13} style={{ color: "var(--gold)" }} />} {r.a} <span className="text-[#8B6BC0]">vs</span> {r.b}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-[#8B8593]">{r.matchesFought} fought</span>
+                    {showCreateControls && <button onClick={() => removeWrestlerRivalry(r.a, r.b)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>}
+                  </div>
+                </div>
+                <div className="flex justify-between text-[9px] text-[#8B8593] mb-1"><span>INTENSITY &middot; <span className="font-bold" style={{ color: readyToBlow ? "var(--gold)" : "#8B6BC0" }}>{stage.label.toUpperCase()}</span></span><span className="text-[#F2ECDD] font-bold">{r.intensity}/100</span></div>
+                <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-[#5B3B8C] to-red-500" style={{ width: `${r.intensity}%` }} />
+                </div>
+                <div className="text-[9px] text-[#8B8593] italic mt-1">{stage.hint}</div>
+              </div>
+            );
+          });
+        })()}
+      </div>
+
+      <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">TAG TEAM</div>
+      <div className="space-y-2">
+        {(() => {
+          const seen = new Set();
+          const rivalryList = [];
+          stables.forEach((s) => {
+            (s.rivalStableIds || []).forEach((otherId) => {
+              const other = stables.find((x) => x.id === otherId);
+              if (!other || !(other.rivalStableIds || []).includes(s.id)) return;
+              const key = [s.id, otherId].sort().join("|");
+              if (seen.has(key)) return;
+              seen.add(key);
+              const story = stableStorylines[key] || { intensity: 20, matchesFought: 0 };
+              rivalryList.push({ key, a: s, b: other, intensity: story.intensity, matchesFought: story.matchesFought });
+            });
+          });
+          rivalryList.sort((x, y) => y.intensity - x.intensity);
+          if (rivalryList.length === 0) return <div className="text-xs text-[#8B8593] italic">None yet.</div>;
+          return rivalryList.map((r) => {
+            const stage = feudStage(r.intensity);
+            const readyToBlow = stage.label === "Ready to Blow Off";
+            return (
+              <div key={r.key} className="bg-[#17151C] rounded-lg p-3" style={{ border: `1px solid ${readyToBlow ? "#C9A227" : "#2B2733"}` }}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-bold text-sm flex items-center gap-1.5">{readyToBlow && <Flame size={13} style={{ color: "var(--gold)" }} />} {r.a.name} <span className="text-[#8B6BC0]">vs</span> {r.b.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-[#8B8593]">{r.matchesFought} fought</span>
+                    {showCreateControls && <button onClick={() => removeStableRivalry(r.a.id, r.b.id)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>}
+                  </div>
+                </div>
+                <div className="flex justify-between text-[9px] text-[#8B8593] mb-1"><span>INTENSITY &middot; <span className="font-bold" style={{ color: readyToBlow ? "var(--gold)" : "#8B6BC0" }}>{stage.label.toUpperCase()}</span></span><span className="text-[#F2ECDD] font-bold">{r.intensity}/100</span></div>
+                <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-[#5B3B8C] to-red-500" style={{ width: `${r.intensity}%` }} />
+                </div>
+                <div className="text-[9px] text-[#8B8593] italic mt-1">{stage.hint}</div>
+              </div>
+            );
+          });
+        })()}
+      </div>
+    </div>
+  );
+
   const renderTagTeamsPanel = (onlyMine) => (
     <div>
       <div className="text-[10px] text-[#8B8593] mb-3">A stable is up to 5 wrestlers. The first two you add become the core tag team — the pairing that tracks a win-loss record and can challenge for tag titles. Booking a tag match filters the second slot to stablemates once you've picked the first.</div>
@@ -3487,6 +3631,63 @@ export default function BookedRingsideEmpire() {
                     )}
                   </div>
 
+                  <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">ACTIVE STORYLINES</div>
+                      <button onClick={() => setTab("storylines")} className="text-[10px] text-[#8B8593] hover:text-[#F2ECDD]">View all</button>
+                    </div>
+                    {(() => {
+                      const yourNames = new Set([...roster, ...perUseWrestlers].map((w) => w.name));
+                      const seen = new Set();
+                      const list = [];
+                      pool.forEach((w) => {
+                        if (!yourNames.has(w.name)) return;
+                        w.rivals.forEach((otherName) => {
+                          const other = pool.find((x) => x.name === otherName);
+                          if (!other || !other.rivals.includes(w.name)) return;
+                          const key = [w.name, otherName].sort().join("|");
+                          if (seen.has(key)) return;
+                          seen.add(key);
+                          const story = storylines[key] || { intensity: 20 };
+                          list.push({ key, a: w.name, b: otherName, intensity: story.intensity });
+                        });
+                      });
+                      const seenStable = new Set();
+                      stables.forEach((s) => {
+                        (s.rivalStableIds || []).forEach((otherId) => {
+                          const other = stables.find((x) => x.id === otherId);
+                          if (!other || !(other.rivalStableIds || []).includes(s.id)) return;
+                          const key = [s.id, otherId].sort().join("|");
+                          if (seenStable.has(key)) return;
+                          seenStable.add(key);
+                          const story = stableStorylines[key] || { intensity: 20 };
+                          list.push({ key, a: s.name, b: other.name, intensity: story.intensity });
+                        });
+                      });
+                      list.sort((x, y) => y.intensity - x.intensity);
+                      if (list.length === 0) return <div className="text-xs text-[#8B8593] italic">None involving your roster yet.</div>;
+                      return (
+                        <div className="space-y-2">
+                          {list.slice(0, 3).map((r) => {
+                            const stage = feudStage(r.intensity);
+                            const readyToBlow = stage.label === "Ready to Blow Off";
+                            return (
+                              <div key={r.key} className="text-xs">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-semibold flex items-center gap-1">{readyToBlow && <Flame size={11} style={{ color: "var(--gold)" }} />} {r.a} <span className="text-[#8B6BC0]">vs</span> {r.b}</span>
+                                  <span className="text-[10px] font-bold" style={{ color: readyToBlow ? "var(--gold)" : "#8B8593" }}>{stage.label}</span>
+                                </div>
+                                <div className="h-1 bg-[#232029] rounded-full overflow-hidden mt-1">
+                                  <div className="h-full bg-gradient-to-r from-[#5B3B8C] to-red-500" style={{ width: `${r.intensity}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
                   <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 dt:col-span-2">
                     <div className="flex items-center justify-between mb-3">
                       <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">NEWS</div>
@@ -3749,134 +3950,7 @@ export default function BookedRingsideEmpire() {
               </div>
             )}
 
-            {rosterSubTab === "rivalries" && (
-              <div>
-                <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">ACTIVE RIVALRIES</div>
-                <div className="text-[10px] text-[#8B8593] mb-3">Book two rivals against each other for a rating boost — keep it up and the feud can blow off into a big payoff match. They also form on their own from locker-room news.</div>
-
-                {!creatingRivalry ? (
-                  <button onClick={() => setCreatingRivalry(true)} className="w-full flex items-center justify-center gap-1.5 py-2.5 mb-3 text-xs font-bold border border-dashed border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#17151C] rounded-lg">
-                    <Plus size={13} /> Create Rivalry
-                  </button>
-                ) : (
-                  <div className="bg-[#17151C] border border-[#5B3B8C] rounded-lg p-4 space-y-3 mb-3">
-                    <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">NEW RIVALRY</div>
-                    <div className="flex gap-2">
-                      {["singles", "tag"].map((t) => (
-                        <button key={t} onClick={() => { setNewRivalryType(t); setNewRivalryA(""); setNewRivalryB(""); }} className={`px-3 py-1.5 rounded text-[11px] font-bold border ${newRivalryType === t ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`} style={newRivalryType === t ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C", color: "#F2ECDD" } : undefined}>
-                          {t === "singles" ? "Singles" : "Tag Team"}
-                        </button>
-                      ))}
-                    </div>
-                    {newRivalryType === "singles" ? (
-                      <div className="grid grid-cols-2 gap-2">
-                        <select value={newRivalryA} onChange={(e) => setNewRivalryA(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
-                          <option value="">Wrestler A...</option>
-                          {bookable.map((w) => <option key={w.name} value={w.name} disabled={w.name === newRivalryB}>{w.name}</option>)}
-                        </select>
-                        <select value={newRivalryB} onChange={(e) => setNewRivalryB(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
-                          <option value="">Wrestler B...</option>
-                          {bookable.map((w) => <option key={w.name} value={w.name} disabled={w.name === newRivalryA}>{w.name}</option>)}
-                        </select>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2">
-                        <select value={newRivalryA} onChange={(e) => setNewRivalryA(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
-                          <option value="">Tag team A...</option>
-                          {stables.map((s) => <option key={s.id} value={s.id} disabled={s.id === newRivalryB}>{s.name}</option>)}
-                        </select>
-                        <select value={newRivalryB} onChange={(e) => setNewRivalryB(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs">
-                          <option value="">Tag team B...</option>
-                          {stables.map((s) => <option key={s.id} value={s.id} disabled={s.id === newRivalryA}>{s.name}</option>)}
-                        </select>
-                      </div>
-                    )}
-                    <div className="flex gap-2">
-                      <button onClick={confirmCreateRivalry} disabled={!newRivalryA || !newRivalryB} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
-                        Create
-                      </button>
-                      <button onClick={() => { setCreatingRivalry(false); setNewRivalryA(""); setNewRivalryB(""); }} className="px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Cancel</button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">SINGLES</div>
-                <div className="space-y-2 mb-4">
-                  {(() => {
-                    const yourNames = new Set([...roster, ...perUseWrestlers].map((w) => w.name));
-                    const seen = new Set();
-                    const rivalryList = [];
-                    pool.forEach((w) => {
-                      if (!yourNames.has(w.name)) return;
-                      w.rivals.forEach((otherName) => {
-                        const other = pool.find((x) => x.name === otherName);
-                        if (!other || !other.rivals.includes(w.name)) return;
-                        const key = [w.name, otherName].sort().join("|");
-                        if (seen.has(key)) return;
-                        seen.add(key);
-                        const story = storylines[key] || { intensity: 20, matchesFought: 0 };
-                        rivalryList.push({ key, a: w.name, b: otherName, intensity: story.intensity, matchesFought: story.matchesFought });
-                      });
-                    });
-                    rivalryList.sort((x, y) => y.intensity - x.intensity);
-                    if (rivalryList.length === 0) return <div className="text-xs text-[#8B8593] italic">None involving your wrestlers yet.</div>;
-                    return rivalryList.map((r) => (
-                      <div key={r.key} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="font-bold text-sm">{r.a} <span className="text-[#8B6BC0]">vs</span> {r.b}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-[#8B8593]">{r.matchesFought} fought</span>
-                            <button onClick={() => removeWrestlerRivalry(r.a, r.b)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>
-                          </div>
-                        </div>
-                        <div className="flex justify-between text-[9px] text-[#8B8593] mb-1"><span>INTENSITY &middot; <span className="text-[#8B6BC0] font-bold">{feudStage(r.intensity).label.toUpperCase()}</span></span><span className="text-[#F2ECDD] font-bold">{r.intensity}/100</span></div>
-                        <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-[#5B3B8C] to-red-500" style={{ width: `${r.intensity}%` }} />
-                        </div>
-                        <div className="text-[9px] text-[#8B8593] italic mt-1">{feudStage(r.intensity).hint}</div>
-                      </div>
-                    ));
-                  })()}
-                </div>
-
-                <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">TAG TEAM</div>
-                <div className="space-y-2">
-                  {(() => {
-                    const seen = new Set();
-                    const rivalryList = [];
-                    stables.forEach((s) => {
-                      (s.rivalStableIds || []).forEach((otherId) => {
-                        const other = stables.find((x) => x.id === otherId);
-                        if (!other || !(other.rivalStableIds || []).includes(s.id)) return;
-                        const key = [s.id, otherId].sort().join("|");
-                        if (seen.has(key)) return;
-                        seen.add(key);
-                        const story = stableStorylines[key] || { intensity: 20, matchesFought: 0 };
-                        rivalryList.push({ key, a: s, b: other, intensity: story.intensity, matchesFought: story.matchesFought });
-                      });
-                    });
-                    rivalryList.sort((x, y) => y.intensity - x.intensity);
-                    if (rivalryList.length === 0) return <div className="text-xs text-[#8B8593] italic">None yet.</div>;
-                    return rivalryList.map((r) => (
-                      <div key={r.key} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="font-bold text-sm">{r.a.name} <span className="text-[#8B6BC0]">vs</span> {r.b.name}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-[#8B8593]">{r.matchesFought} fought</span>
-                            <button onClick={() => removeStableRivalry(r.a.id, r.b.id)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>
-                          </div>
-                        </div>
-                        <div className="flex justify-between text-[9px] text-[#8B8593] mb-1"><span>INTENSITY &middot; <span className="text-[#8B6BC0] font-bold">{feudStage(r.intensity).label.toUpperCase()}</span></span><span className="text-[#F2ECDD] font-bold">{r.intensity}/100</span></div>
-                        <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-[#5B3B8C] to-red-500" style={{ width: `${r.intensity}%` }} />
-                        </div>
-                        <div className="text-[9px] text-[#8B8593] italic mt-1">{feudStage(r.intensity).hint}</div>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </div>
-            )}
+            {rosterSubTab === "rivalries" && renderRivalriesPanel(true)}
 
             {rosterSubTab === "stables" && renderTagTeamsPanel(true)}
 
@@ -3956,6 +4030,14 @@ export default function BookedRingsideEmpire() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {tab === "storylines" && (
+          <div>
+            <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">STORYLINES</div>
+            <div className="text-[10px] text-[#8B8593] mb-4">Every feud involving your roster, at a glance — gold border and flame mean it's hot enough for a blow-off match. Create or end a rivalry from Roster &middot; Rivalries.</div>
+            {renderRivalriesPanel(false)}
           </div>
         )}
 
@@ -5261,6 +5343,7 @@ export default function BookedRingsideEmpire() {
             <div className="text-[10px] text-[#8B8593] mb-4">Everything else — the world beyond your own card.</div>
             <div className="space-y-2.5">
               {[
+                { key: "storylines", label: "Storylines", desc: `${Object.keys(storylines).length + Object.keys(stableStorylines).length} active`, icon: Flame },
                 { key: "wrestlers", label: "Wrestlers", desc: "Browse & hire the full pool", icon: UserPlus },
                 { key: "promotions", label: "Promotions", desc: "Rival companies", icon: Globe2 },
                 { key: "deals", label: "Deals", desc: "TV networks & sponsors", icon: Tv },
@@ -5314,7 +5397,7 @@ export default function BookedRingsideEmpire() {
             );
           })}
           {(() => {
-            const menuActive = ["menu", "wrestlers", "promotions", "deals", "rankings", "news", "guide", "saves", "achievements", "backoffice", "halloffame", "merch"].includes(tab);
+            const menuActive = ["menu", "wrestlers", "promotions", "deals", "rankings", "news", "guide", "saves", "achievements", "backoffice", "halloffame", "merch", "storylines"].includes(tab);
             return (
               <button
                 onClick={() => setTab("menu")}
