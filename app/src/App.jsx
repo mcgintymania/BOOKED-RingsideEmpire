@@ -2114,8 +2114,13 @@ export default function BookedRingsideEmpire() {
       // Growth gets harder the more established a city already is — running shows
       // always gives a small baseline bump (any exposure helps), but a big swing
       // from a great rating gets dampened once you're already popular there.
-      const rawCityDelta = 1 + (fullRating - 35) * 0.08 + (networkActive ? NETWORK_POPULARITY_BOOST : 0);
-      const growthScale = rawCityDelta > 0 ? clamp(1 - Math.floor(cityPopularity[city] / 10) * 0.07, 0.3, 1) * rosterQualityMult : 1;
+      // The break-even rating a show needs to clear scales up with how popular
+      // you already are here — a brand-new Backyard-tier promotion only needs a
+      // teens/twenties rating to grow, while a well-known city demands a real 35+.
+      const breakEvenRating = clamp(10 + cityPopularity[city] * 0.3, 10, 35);
+      const rawCityDelta = 1 + (fullRating - breakEvenRating) * 0.08 + (networkActive ? NETWORK_POPULARITY_BOOST : 0);
+      const growthDampener = clamp(1 - Math.floor(cityPopularity[city] / 10) * 0.07, 0.3, 1);
+      const growthScale = rawCityDelta > 0 ? growthDampener * rosterQualityMult : growthDampener;
       const newCityPop = clamp(cityPopularity[city] + rawCityDelta * growthScale, 0, 100);
       const newVisited = cityVisits[city] > 0 ? visitedCities : [...visitedCities, city];
       const newDiversityCap = Math.min(100, 15 + (newVisited.length - 1) * 14);
