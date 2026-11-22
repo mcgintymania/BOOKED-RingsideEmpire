@@ -31,7 +31,6 @@ body {
     radial-gradient(ellipse 110% 75% at 50% 115%, rgba(91,59,140,0.55), transparent 70%),
     linear-gradient(180deg, rgba(58,34,101,0.35), rgba(10,10,12,0.1) 55%),
     var(--bg);
-  background-attachment: fixed;
 }
 select, option { background-color: var(--card) !important; color: var(--text) !important; }
 input, textarea { color: var(--text) !important; }
@@ -120,6 +119,7 @@ const ACHIEVEMENTS = [
 // zero) grows slower. Never a hard block, just a soft nudge either way.
 const EXPECTED_ROSTER_OVERALL = { Unknown: 20, Local: 35, Regional: 50, National: 65, International: 80 };
 const WEIGHT_CLASSES = ["Cruiserweight", "Light Heavyweight", "Heavyweight"];
+const DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const ALIGNMENTS = ["Face", "Heel"];
 
 const CITIES = ["Leeds", "Manchester", "Newcastle", "Cardiff", "London", "Glasgow", "Birmingham", "Liverpool", "Sheffield", "Edinburgh", "International"];
@@ -930,6 +930,10 @@ function popularityTier(p) {
   return "Unknown";
 }
 const TIER_RANK = { Unknown: 0, Local: 1, Regional: 2, National: 3, International: 4 };
+// Founding a developmental feeder promotion is a real investment, not a free
+// toggle — building out a training facility and a second roster costs more
+// the bigger you already are.
+const FEEDER_SETUP_COSTS = { Unknown: 50000, Local: 75000, Regional: 125000, National: 250000, International: 500000 };
 
 // Speciality Matches — gated by company level, cost extra to book, and boost the
 // rating ceiling. Each type is driven by whichever stat fits it best, blended into
@@ -1401,7 +1405,6 @@ const SIDEBAR_SECTIONS = [
       { key: "promotions", label: "Promotions", icon: Globe2 },
       { key: "rankings", label: "Rankings", icon: TrendingUp },
       { key: "wrestlers", label: "Wrestlers", icon: UserPlus },
-      { key: "worldeditor", label: "World Editor", icon: Wrench },
     ],
   },
   {
@@ -1493,6 +1496,7 @@ export default function BookedRingsideEmpire() {
 
   // World Editor — direct editing of wrestlers/companies, plus CSV bulk import.
   const [worldEditorSubTab, setWorldEditorSubTab] = useState("wrestlers");
+  const [backOfficeSubTab, setBackOfficeSubTab] = useState("general");
   const [editorWrestlerSearch, setEditorWrestlerSearch] = useState("");
   const [editingWrestlerDraft, setEditingWrestlerDraft] = useState(null); // a full editable copy of a pool wrestler, or a fresh blank one
   const [editingCompanyDraft, setEditingCompanyDraft] = useState(null); // same idea for a rivalCompanies entry
@@ -1505,6 +1509,7 @@ export default function BookedRingsideEmpire() {
   const [expandedResults, setExpandedResults] = useState(() => new Set());
   const [hiringTarget, setHiringTarget] = useState(null);
   const [hireWeeks, setHireWeeks] = useState(26);
+  const [hireLevel, setHireLevel] = useState("main");
   const [hireResult, setHireResult] = useState(null);
   const [extendingTarget, setExtendingTarget] = useState(null);
   const [firingTarget, setFiringTarget] = useState(null);
@@ -1603,11 +1608,13 @@ export default function BookedRingsideEmpire() {
   // show level and venue the week it's due; a TV deal can optionally be
   // attached to exactly one template so it only pays out when that specific
   // show airs, instead of every main-roster show.
-  const [eventTemplates, setEventTemplates] = useState([]); // { id, name, level, arenaIdx, intervalWeeks, nextWeekNumber }
+  const [eventTemplates, setEventTemplates] = useState([]); // { id, name, level, arenaIdx, intervalWeeks, nextWeekNumber, dayOfWeek, preferredCity }
   const [newTemplateName, setNewTemplateName] = useState("");
   const [newTemplateLevel, setNewTemplateLevel] = useState("main");
   const [newTemplateArenaIdx, setNewTemplateArenaIdx] = useState(0);
   const [newTemplateIntervalWeeks, setNewTemplateIntervalWeeks] = useState(1);
+  const [newTemplateDayOfWeek, setNewTemplateDayOfWeek] = useState("Monday");
+  const [newTemplatePreferredCity, setNewTemplatePreferredCity] = useState("");
   const [financeHistory, setFinanceHistory] = useState([{ weekNumber: 0, year: 1, weekOfYear: 0, bank: 20000 }]);
   const [universeFeed, setUniverseFeed] = useState([]);
   const [storylines, setStorylines] = useState({}); // "nameA|nameB" (sorted) -> { intensity, matchesFought }
@@ -1650,7 +1657,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates((ts) => [...ts, {
       id: `tmpl-${Date.now()}`, name: newTemplateName.trim(), level: newTemplateLevel,
       arenaIdx: newTemplateArenaIdx, intervalWeeks: Math.max(1, newTemplateIntervalWeeks),
-      nextWeekNumber: weekNumber,
+      nextWeekNumber: weekNumber, dayOfWeek: newTemplateDayOfWeek, preferredCity: newTemplatePreferredCity || null,
     }]);
     // A brand-new template due immediately (this week) won't be picked up by
     // the week-change effect, since weekNumber itself hasn't changed — apply
@@ -1658,7 +1665,9 @@ export default function BookedRingsideEmpire() {
     setShowLevel(newTemplateLevel);
     setArenaIdx(newTemplateArenaIdx);
     setTicketPrice(ARENAS[newTemplateArenaIdx].ticketMin);
+    if (newTemplatePreferredCity) setCity(newTemplatePreferredCity);
     setNewTemplateName(""); setNewTemplateLevel("main"); setNewTemplateArenaIdx(0); setNewTemplateIntervalWeeks(1);
+    setNewTemplateDayOfWeek("Monday"); setNewTemplatePreferredCity("");
   };
   const removeEventTemplate = (id) => {
     setEventTemplates((ts) => ts.filter((t) => t.id !== id));
@@ -1702,7 +1711,7 @@ export default function BookedRingsideEmpire() {
 
   const hireTierCap = HIRE_TIER_CAP[popularityTier(popularity)];
   const exceedsHireCap = (w) => hireTierCap != null && TIER_ORDER.indexOf(w.tier) > TIER_ORDER.indexOf(hireTierCap);
-  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireResult(null); };
+  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireLevel("main"); setHireResult(null); };
   const happinessRefusalAdj = (w) => {
     if (w.happiness < 20) return 0.3;
     if (w.happiness < 40) return 0.15;
@@ -1720,9 +1729,10 @@ export default function BookedRingsideEmpire() {
       setHireResult("refused");
       return;
     }
-    setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, contractedTo: "player", contractExpiresWeek: weekNumber + hireWeeks } : w)));
+    const signedLevel = hireLevel === "developmental" && feederCompany ? "developmental" : "main";
+    setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, contractedTo: "player", contractExpiresWeek: weekNumber + hireWeeks, rosterLevel: signedLevel } : w)));
     setPerUseRoster((pu) => pu.filter((n) => n !== hiringTarget.name));
-    setUniverseFeed((feed) => [{ id: `h-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has signed ${hiringTarget.name} to an exclusive contract.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
+    setUniverseFeed((feed) => [{ id: `h-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has signed ${hiringTarget.name} to an exclusive contract${signedLevel === "developmental" ? " (Developmental)" : ""}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
     setHireResult("accepted");
   };
   const buyoutCost = (w) => {
@@ -1766,10 +1776,13 @@ export default function BookedRingsideEmpire() {
     setWorkingAgreements((ids) => ids.filter((id) => id !== co.id));
     setUniverseFeed((feed) => [{ id: `wae-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `The working agreement between ${companyName} and ${co.name} has ended.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
   };
+  const feederSetupCost = FEEDER_SETUP_COSTS[popularityTier(popularity)];
   const foundFeederCompany = () => {
-    if (!newFeederName.trim() || feederCompany) return;
+    if (!newFeederName.trim() || feederCompany || bank < feederSetupCost) return;
+    setBank((b) => b - feederSetupCost);
+    setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - feederSetupCost }]);
     setFeederCompany({ name: newFeederName.trim(), foundedWeek: weekNumber });
-    setUniverseFeed((feed) => [{ id: `feeder-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has founded ${newFeederName.trim()} as a developmental feeder promotion. Shows booked at the Developmental level now build its reputation.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
+    setUniverseFeed((feed) => [{ id: `feeder-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has invested £${feederSetupCost.toLocaleString()} to found ${newFeederName.trim()} as a developmental feeder promotion. The Developmental show level and roster assignment are now unlocked.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
     setNewFeederName("");
   };
 
@@ -3517,6 +3530,7 @@ export default function BookedRingsideEmpire() {
       setShowLevel(due.level);
       setArenaIdx(due.arenaIdx);
       setTicketPrice(ARENAS[due.arenaIdx].ticketMin);
+      if (due.preferredCity) setCity(due.preferredCity);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekCount]);
@@ -3892,7 +3906,6 @@ export default function BookedRingsideEmpire() {
           linear-gradient(180deg, rgba(58,34,101,0.35), rgba(10,10,12,0.1) 55%),
           #0A0A0C
         `,
-        backgroundAttachment: "fixed",
       }}
     >
       <style>{FONT_IMPORT}</style>
@@ -4455,17 +4468,24 @@ export default function BookedRingsideEmpire() {
                       {w.injuryWeeksRemaining && <span className="text-red-400"> &middot; {w.injuryType ? `${w.injuryType.toUpperCase()} ` : ""}INJURED ({w.injuryWeeksRemaining}wk)</span>}
                     </div>
                     <div className="text-[10px] text-[#8B8593]">£{weeklyWage(w).toLocaleString()}/wk &middot; {w.contractExpiresWeek - weekNumber}wk left</div>
-                    <div className="flex items-center gap-1 mt-2">
-                      {["main", "developmental"].map((lvl) => (
+                    <div className="flex items-center gap-1.5 mt-2">
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${(w.rosterLevel || "main") === "main" ? "bg-[#5B3B8C] text-[#F2ECDD]" : "bg-[#241B33] text-[#8B6BC0]"}`}>
+                        {(w.rosterLevel || "main") === "main" ? "MAIN ROSTER" : "DEVELOPMENTAL"}
+                      </span>
+                      {(w.rosterLevel || "main") === "main" ? (
                         <button
-                          key={lvl}
-                          onClick={() => setRosterLevel(w.name, lvl)}
-                          className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(w.rosterLevel || "main") === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}
-                          style={(w.rosterLevel || "main") === lvl ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}
+                          onClick={() => feederCompany && setRosterLevel(w.name, "developmental")}
+                          disabled={!feederCompany}
+                          title={!feederCompany ? "Found a feeder promotion from Back Office first" : undefined}
+                          className="text-[9px] font-bold text-[#8B8593] hover:text-[#F2ECDD] disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                          {lvl === "main" ? "Main Roster" : "Developmental"}
+                          Demote to Developmental
                         </button>
-                      ))}
+                      ) : (
+                        <button onClick={() => setRosterLevel(w.name, "main")} className="text-[9px] font-bold text-[#8B6BC0] hover:text-[#F2ECDD]">
+                          Promote to Main Roster
+                        </button>
+                      )}
                     </div>
                     <button onClick={() => startExtending(w)} className="mt-2 text-[10px] font-bold text-[#8B6BC0] hover:text-[#F2ECDD]">Extend contract</button>
                   </div>
@@ -4737,7 +4757,7 @@ export default function BookedRingsideEmpire() {
                         <div>
                           <div className="text-xs font-semibold">{t.name} {networkDeal?.eventTemplateId === t.id && <Tv size={11} className="inline text-[#8B6BC0] ml-1" />}</div>
                           <div className="text-[9px] text-[#8B8593]">
-                            {t.level === "main" ? "Main Roster" : "Developmental"} &middot; {ARENAS[t.arenaIdx].name} &middot; every {t.intervalWeeks} week(s) &middot; next: {formatDate(addWeeks(START_DATE, t.nextWeekNumber - 1))}{t.nextWeekNumber <= weekNumber ? " (this week)" : ""}
+                            {t.level === "main" ? "Main Roster" : "Developmental"} &middot; {ARENAS[t.arenaIdx].name}{t.preferredCity ? ` (${t.preferredCity})` : ""} &middot; {t.dayOfWeek || "Monday"}s &middot; every {t.intervalWeeks} week(s) &middot; next: {formatDate(addWeeks(START_DATE, t.nextWeekNumber - 1))}{t.nextWeekNumber <= weekNumber ? " (this week)" : ""}
                           </div>
                         </div>
                         <button onClick={() => removeEventTemplate(t.id)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>
@@ -4761,11 +4781,20 @@ export default function BookedRingsideEmpire() {
                 className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mb-2"
               />
               <div className="flex items-center gap-2 flex-wrap mb-2">
-                {["main", "developmental"].map((lvl) => (
-                  <button key={lvl} onClick={() => setNewTemplateLevel(lvl)} className={`px-2 py-1 rounded text-[10px] font-bold border ${newTemplateLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}>
-                    {lvl === "main" ? "Main Roster" : "Developmental"}
-                  </button>
-                ))}
+                {["main", "developmental"].map((lvl) => {
+                  const devLocked = lvl === "developmental" && !feederCompany;
+                  return (
+                    <button
+                      key={lvl}
+                      disabled={devLocked}
+                      onClick={() => { if (!devLocked) setNewTemplateLevel(lvl); }}
+                      title={devLocked ? "Found a feeder promotion from Back Office first" : undefined}
+                      className={`px-2 py-1 rounded text-[10px] font-bold border ${devLocked ? "text-[#5A5660] border-[#2B2733] cursor-not-allowed" : newTemplateLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}
+                    >
+                      {lvl === "main" ? "Main Roster" : "Developmental"}
+                    </button>
+                  );
+                })}
                 <select value={newTemplateArenaIdx} onChange={(e) => setNewTemplateArenaIdx(Number(e.target.value))} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
                   {ARENAS.map((ar, i) => <option key={ar.name} value={i}>{ar.name}</option>)}
                 </select>
@@ -4773,6 +4802,13 @@ export default function BookedRingsideEmpire() {
                   <option value={1}>Weekly</option>
                   <option value={4}>Monthly</option>
                   <option value={13}>Quarterly (PPV-style)</option>
+                </select>
+                <select value={newTemplateDayOfWeek} onChange={(e) => setNewTemplateDayOfWeek(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
+                  {DAYS_OF_WEEK.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <select value={newTemplatePreferredCity} onChange={(e) => setNewTemplatePreferredCity(e.target.value)} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
+                  <option value="">Any city</option>
+                  {unlockedCities.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <button onClick={addEventTemplate} disabled={!newTemplateName.trim()} className="ml-auto px-3 py-1.5 rounded text-[10px] font-bold bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD]">
                   Add
@@ -4967,12 +5003,29 @@ export default function BookedRingsideEmpire() {
                   {hireResult === "accepted" && <div className="text-xs text-[#8B6BC0] mb-3">Signed!</div>}
                   {!hireResult && (
                     <>
-                      <div className="grid grid-cols-2 gap-2 mb-4">
+                      <div className="grid grid-cols-2 gap-2 mb-3">
                         {CONTRACT_OPTIONS.map((wk) => (
                           <button key={wk} onClick={() => setHireWeeks(wk)} className={`px-3 py-2 rounded text-xs font-bold border ${hireWeeks === wk ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={hireWeeks === wk ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
                             {wk} weeks
                           </button>
                         ))}
+                      </div>
+                      <div className="text-[9px] text-[#8B8593] mb-1">SIGN TO</div>
+                      <div className="flex gap-2 mb-4">
+                        {["main", "developmental"].map((lvl) => {
+                          const devLocked = lvl === "developmental" && !feederCompany;
+                          return (
+                            <button
+                              key={lvl}
+                              disabled={devLocked}
+                              onClick={() => { if (!devLocked) setHireLevel(lvl); }}
+                              title={devLocked ? "Found a feeder promotion from Back Office first" : undefined}
+                              className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold border ${devLocked ? "text-[#5A5660] border-[#2B2733] cursor-not-allowed" : hireLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}
+                            >
+                              {lvl === "main" ? "Main Roster" : "Developmental"}
+                            </button>
+                          );
+                        })}
                       </div>
                       <button onClick={confirmHire} className="w-full py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded">Offer contract</button>
                     </>
@@ -5260,44 +5313,71 @@ export default function BookedRingsideEmpire() {
             <div className="flex-1 min-w-0 space-y-5">
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
               <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Ticket size={14} /> SHOW LEVEL</div>
-              <div className="flex gap-2 mb-2">
-                {["main", "developmental"].map((lvl) => (
-                  <button
-                    key={lvl}
-                    onClick={() => { setShowLevel(lvl); if (lvl === "developmental" && arenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX) { setArenaIdx(0); setTicketPrice(ARENAS[0].ticketMin); } }}
-                    className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${showLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"}`}
-                    style={showLevel === lvl ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}
-                  >
-                    {lvl === "main" ? "MAIN ROSTER SHOW" : "DEVELOPMENTAL SHOW"}
-                  </button>
-                ))}
-              </div>
-              <div className="text-[9px] text-[#8B8593]">
-                {showLevel === "main"
-                  ? `Draws from your Main Roster (${roster.filter((w) => (w.rosterLevel || "main") === "main").length}) plus per-use talent.`
-                  : `Draws from your Developmental roster (${roster.filter((w) => w.rosterLevel === "developmental").length}) plus per-use talent — capped to Backyard/Small venues regardless of company tier.`}
-              </div>
+              {activeEventTemplate ? (
+                <>
+                  <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2.5 mb-2">
+                    <div>
+                      <div className="text-xs font-bold">{activeEventTemplate.name}</div>
+                      <div className="text-[10px] text-[#8B8593]">{showLevel === "main" ? "Main Roster Show" : "Developmental Show"} &middot; {activeEventTemplate.dayOfWeek || "Monday"}s</div>
+                    </div>
+                    <Lock size={14} className="text-[#8B8593]" />
+                  </div>
+                  <div className="text-[9px] text-[#8B8593]">Set by this event — change the level or venue from Calendar &middot; Show Events.</div>
+                </>
+              ) : (
+                <>
+                  <div className="flex gap-2 mb-2">
+                    {["main", "developmental"].map((lvl) => {
+                      const devLocked = lvl === "developmental" && !feederCompany;
+                      return (
+                        <button
+                          key={lvl}
+                          disabled={devLocked}
+                          onClick={() => { if (devLocked) return; setShowLevel(lvl); if (lvl === "developmental" && arenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX) { setArenaIdx(0); setTicketPrice(ARENAS[0].ticketMin); } }}
+                          className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${devLocked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : showLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"}`}
+                          style={!devLocked && showLevel === lvl ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}
+                        >
+                          {lvl === "main" ? "MAIN ROSTER SHOW" : devLocked ? "DEVELOPMENTAL (LOCKED)" : "DEVELOPMENTAL SHOW"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[9px] text-[#8B8593]">
+                    {showLevel === "main"
+                      ? `Draws from your Main Roster (${roster.filter((w) => (w.rosterLevel || "main") === "main").length}) plus per-use talent. No event scheduled this week — set one up from Calendar to lock in a weekly/monthly/PPV slot.`
+                      : `Draws from your Developmental roster (${roster.filter((w) => w.rosterLevel === "developmental").length}) plus per-use talent — capped to Backyard/Small venues regardless of company tier.`}
+                    {!feederCompany && " Found a feeder promotion from Back Office to unlock Developmental."}
+                  </div>
+                </>
+              )}
             </div>
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
               <div className="flex items-center gap-2 text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3"><Building2 size={14} /> VENUE</div>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {ARENAS.map((ar, i) => {
-                  const locked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[ar.minTier] || (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX);
-                  return (
-                    <button
-                      key={ar.name}
-                      onClick={() => { if (locked) return; setArenaIdx(i); setTicketPrice(ar.ticketMin); }}
-                      disabled={locked}
-                      className={`px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${
-                        locked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : i === arenaIdx ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"
-                      }`}
-                      style={!locked && i === arenaIdx ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C", color: "#F2ECDD" } : undefined}
-                    >
-                      {ar.name.toUpperCase()}{locked ? (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX ? " (Main Roster only)" : ` (${ar.minTier}+)`) : ""}
-                    </button>
-                  );
-                })}
-              </div>
+              {activeEventTemplate ? (
+                <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2.5 mb-4">
+                  <span className="text-xs font-bold">{arena.name.toUpperCase()}</span>
+                  <Lock size={14} className="text-[#8B8593]" />
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {ARENAS.map((ar, i) => {
+                    const locked = TIER_RANK[popularityTier(popularity)] < TIER_RANK[ar.minTier] || (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX);
+                    return (
+                      <button
+                        key={ar.name}
+                        onClick={() => { if (locked) return; setArenaIdx(i); setTicketPrice(ar.ticketMin); }}
+                        disabled={locked}
+                        className={`px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${
+                          locked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : i === arenaIdx ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"
+                        }`}
+                        style={!locked && i === arenaIdx ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C", color: "#F2ECDD" } : undefined}
+                      >
+                        {ar.name.toUpperCase()}{locked ? (showLevel === "developmental" && i > DEVELOPMENTAL_MAX_ARENA_IDX ? " (Main Roster only)" : ` (${ar.minTier}+)`) : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               <div className="text-[10px] text-[#8B8593] mb-3">
                 Capacity {arena.crowdMin.toLocaleString()}&ndash;{arena.crowdMax.toLocaleString()} &middot; Booking cost £{arena.cost.toLocaleString()}
               </div>
@@ -6005,7 +6085,7 @@ export default function BookedRingsideEmpire() {
           </div>
         )}
 
-        {tab === "worldeditor" && (
+        {tab === "backoffice" && backOfficeSubTab === "worldeditor" && (
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">WORLD EDITOR</div>
             <div className="text-[10px] text-[#8B8593] mb-4">Create, edit, or delete wrestlers and companies directly — or bulk-import a whole roster from a CSV template (opens and edits fine in Excel or Google Sheets).</div>
@@ -6330,8 +6410,16 @@ export default function BookedRingsideEmpire() {
         {tab === "backoffice" && (
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">BACK OFFICE</div>
-            <div className="text-[10px] text-[#8B8593] mb-4">How the game refers to things — not a gameplay lever, just the names attached to them.</div>
+            <div className="text-[10px] text-[#8B8593] mb-4">Company and promoter details, your feeder promotion, and the World Editor.</div>
+            <div className="flex gap-2 mb-4">
+              <SubTabButton active={backOfficeSubTab === "general"} onClick={() => setBackOfficeSubTab("general")} icon={Landmark} label="General" />
+              <SubTabButton active={backOfficeSubTab === "worldeditor"} onClick={() => setBackOfficeSubTab("worldeditor")} icon={Wrench} label="World Editor" />
+            </div>
+          </div>
+        )}
 
+        {tab === "backoffice" && backOfficeSubTab === "general" && (
+          <div>
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
               <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">COMPANY</div>
               <div className="text-[10px] text-[#8B8593] mb-1">COMPANY NAME</div>
@@ -6346,11 +6434,11 @@ export default function BookedRingsideEmpire() {
                 </div>
               ) : (
                 <>
-                  <div className="text-[10px] text-[#8B8593] mb-3">Found a developmental promotion of your own, NXT-style — a one-time, permanent decision. It builds its reputation from whatever you book at the Developmental show level.</div>
+                  <div className="text-[10px] text-[#8B8593] mb-3">Found a developmental promotion of your own, NXT-style — a one-time, permanent decision that costs real money to set up, and unlocks the Developmental show level and roster assignment for good.</div>
                   <div className="flex gap-2">
                     <input value={newFeederName} onChange={(e) => setNewFeederName(e.target.value)} placeholder="e.g. Ringside Empire: Rise" className="flex-1 border border-[#2B2733] rounded px-3 py-2 text-sm" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
-                    <button onClick={foundFeederCompany} disabled={!newFeederName.trim()} className="px-4 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
-                      Found It
+                    <button onClick={foundFeederCompany} disabled={!newFeederName.trim() || bank < feederSetupCost} className="px-4 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded whitespace-nowrap">
+                      Found It (£{feederSetupCost.toLocaleString()})
                     </button>
                   </div>
                 </>
@@ -6542,7 +6630,6 @@ export default function BookedRingsideEmpire() {
                 { key: "storylines", label: "Storylines", desc: `${Object.keys(storylines).length + Object.keys(stableStorylines).length} active`, icon: Flame },
                 { key: "calendar", label: "Calendar", desc: `${scheduledEvents.length} event${scheduledEvents.length === 1 ? "" : "s"} scheduled`, icon: Calendar },
                 { key: "wrestlers", label: "Wrestlers", desc: "Browse & hire the full pool", icon: UserPlus },
-                { key: "worldeditor", label: "World Editor", desc: "Edit or bulk-import wrestlers & companies", icon: Wrench },
                 { key: "promotions", label: "Promotions", desc: "Rival companies", icon: Globe2 },
                 { key: "deals", label: "Deals", desc: "TV networks & sponsors", icon: Tv },
                 { key: "merch", label: "Merchandise", desc: popularity >= MERCH_UNLOCK_POPULARITY ? `${merchStock} units in stock` : "Locked", icon: Ticket },
