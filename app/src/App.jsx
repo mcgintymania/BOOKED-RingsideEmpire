@@ -1080,18 +1080,27 @@ function popularityTier(p) {
   return "Unknown";
 }
 const TIER_RANK = { Unknown: 0, Local: 1, Regional: 2, National: 3, International: 4 };
-// Rival promotions don't have a visible Staff roster of their own — modeling
-// one per company would be a lot of invisible bookkeeping for something the
-// player never directly touches. Instead, their backstage quality (agents,
-// trainers, production) scales with their own popularity, same shape as the
-// player's staffRatingBonus — the biggest promotions just have better people
-// around, which already reads clearly in their match ratings.
-function rivalStaffBonus(popularity) {
-  return Math.round((clamp(popularity, 0, 100) / 100) * 10);
+// Rival promotions don't have a visible Staff roster panel of their own —
+// listing names would be a lot of UI for something the player never directly
+// touches — but they DO actually compete for the same shared staff candidate
+// pool the player hires from, hiring and occasionally losing people over
+// time (see the weekly tick). Their backstage quality is a popularity floor
+// (so a company that hasn't landed anyone yet still isn't totally hopeless)
+// plus a real bonus from whoever they've actually got signed — so two
+// equally popular rivals can have visibly different production depending on
+// whether they've actually won the hiring race.
+function rivalStaffBonus(popularity, hiredSkills = []) {
+  const base = Math.round((clamp(popularity, 0, 100) / 100) * 6);
+  const avgSkill = hiredSkills.length > 0 ? hiredSkills.reduce((s, v) => s + v, 0) / hiredSkills.length : 0;
+  const staffBonus = Math.round((avgSkill / 100) * 6);
+  return base + staffBonus;
 }
-const RIVAL_PRODUCTION_LABELS = { Unknown: "Minimal", Local: "Basic", Regional: "Solid", National: "Polished", International: "Elite" };
-function rivalProductionLabel(popularity) {
-  return RIVAL_PRODUCTION_LABELS[popularityTier(popularity)];
+function rivalProductionLabel(bonusPoints) {
+  if (bonusPoints >= 10) return "Elite";
+  if (bonusPoints >= 7) return "Polished";
+  if (bonusPoints >= 4) return "Solid";
+  if (bonusPoints >= 1) return "Basic";
+  return "Minimal";
 }
 // Every rival's own typical show length — a base template, same idea as the
 // player's own venue-suggested default, derived straight from popularity so
@@ -2993,6 +3002,7 @@ export default function BookedRingsideEmpire() {
       const rivalNewsEntries = [];
       const rivalPoolUpdates = {};
       const rivalTitleUpdates = {};
+      const rivalStaffUpdates = {}; // staff candidate id -> {contractedTo, contractExpiresWeek}
       // Computed as a plain loop first, not inside setRivalCompanies — mutating
       // outer variables as a side effect of a state updater isn't reliable, since
       // React doesn't guarantee exactly when that function body runs relative to
@@ -3015,7 +3025,9 @@ export default function BookedRingsideEmpire() {
         const signedRosterNow = pool.filter((w) => w.contractedTo === co.id);
         const weeklyPayroll = signedRosterNow.reduce((sum, w) => sum + weeklyWage(w), 0);
         const weeklyIncome = Math.round(co.popularity * 1500 + rand(-3000, 5000));
-        let newFunds = clamp(co.funds + weeklyIncome - weeklyPayroll, 0, 5000000);
+        const signedStaffNow = staffPool.filter((s) => s.contractedTo === co.id);
+        const staffPayroll = signedStaffNow.reduce((sum, s) => sum + staffWeeklyWage(s.skill), 0);
+        let newFunds = clamp(co.funds + weeklyIncome - weeklyPayroll - staffPayroll, 0, 5000000);
         let signedNow = pool.filter((w) => w.contractedTo === co.id && !rivalPoolUpdates[w.name]);
         let freelancers = pool.filter((w) => w.contractedTo === null && !rivalPoolUpdates[w.name] && !w.injuryWeeksRemaining);
         const title = rivalTitles.find((t) => t.companyId === co.id);
@@ -3074,6 +3086,32 @@ export default function BookedRingsideEmpire() {
             rivalNewsEntries.push({ text: title.holder === w.name ? `${w.name} retains the ${title.name}.` : `${w.name} is the new ${title.name}!`, companyId: co.id });
           }
         }
+
+        // Staff — real competition for the same shared candidate pool the
+        // player hires from, not just a popularity formula. A company fills
+        // an open role on its own independent roll (richer, more popular
+        // ones reach for the better candidate), and can just as easily lose
+        // someone to burnout, budget cuts, or getting poached elsewhere.
+        const openStaffRoles = STAFF_ROLES.filter((r) => !signedStaffNow.some((s) => s.role === r.key && !rivalStaffUpdates[s.id]));
+        if (openStaffRoles.length > 0 && Math.random() < 0.1) {
+          const role = openStaffRoles[rand(0, openStaffRoles.length - 1)];
+          const freeCandidates = staffPool.filter((s) => s.role === role.key && s.contractedTo === null && !rivalStaffUpdates[s.id]);
+          if (freeCandidates.length > 0) {
+            const sortedBySkill = [...freeCandidates].sort((a, b) => b.skill - a.skill);
+            const reach = Math.min(sortedBySkill.length - 1, Math.round((co.popularity / 100) * (sortedBySkill.length - 1)));
+            const pick = sortedBySkill[rand(0, reach)];
+            rivalStaffUpdates[pick.id] = { contractedTo: co.id, contractExpiresWeek: weekNumber + 52 };
+            rivalNewsEntries.push({ text: `${co.name} has hired ${pick.name} as ${role.label}.`, companyId: co.id });
+          }
+        } else if (signedStaffNow.length > 0 && Math.random() < (financialStrain ? 0.12 : 0.05)) {
+          const leaving = signedStaffNow.filter((s) => !rivalStaffUpdates[s.id]);
+          if (leaving.length > 0) {
+            const s = leaving[rand(0, leaving.length - 1)];
+            rivalStaffUpdates[s.id] = { contractedTo: null, contractExpiresWeek: null };
+            rivalNewsEntries.push({ text: `${s.name} has left ${co.name}'s staff.`, companyId: co.id });
+          }
+        }
+
         const newTier = popularityTier(newPop);
         if (newTier !== co.lastTier) {
           rivalNewsEntries.push({ text: `${co.name} has ${TIER_RANK[newTier] > TIER_RANK[co.lastTier] ? "grown" : "shrunk"} to ${newTier} status!`, companyId: co.id });
@@ -3082,6 +3120,7 @@ export default function BookedRingsideEmpire() {
       });
       setRivalCompanies(newRivalCompanies);
       if (Object.keys(rivalPoolUpdates).length > 0) setPool((p) => p.map((w) => (rivalPoolUpdates[w.name] ? { ...w, ...rivalPoolUpdates[w.name] } : w)));
+      if (Object.keys(rivalStaffUpdates).length > 0) setStaffPool((sp) => sp.map((s) => (rivalStaffUpdates[s.id] ? { ...s, ...rivalStaffUpdates[s.id] } : s)));
       const rivalReignCandidates = [];
       if (Object.keys(rivalTitleUpdates).length > 0) {
         setRivalTitles((ts) => {
@@ -3140,6 +3179,7 @@ export default function BookedRingsideEmpire() {
       const newRivalShowRecords = [];
       rivalCompanies.forEach((co) => {
         if (co.acquired) return;
+        const hiredStaffSkills = staffPool.filter((s) => s.contractedTo === co.id).map((s) => s.skill);
         const signedRoster = pool.filter((w) => w.contractedTo === co.id && !w.injuryWeeksRemaining && !rivalPoolUpdates[w.name]);
         const availableFreelancers = pool.filter((w) => w.contractedTo === null && !w.injuryWeeksRemaining && !rivalPoolUpdates[w.name] && !takenFreelancers.has(w.name));
         let freelancePicks = [];
@@ -3171,7 +3211,7 @@ export default function BookedRingsideEmpire() {
             const rivalAvgAttr = (attrOf(a) + attrOf(b)) / 2;
             const rivalFloor = Math.round(rivalAvgAttr * 0.25);
             const rivalSpread = Math.round(20 + rivalAvgAttr * 0.55);
-            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread) + rivalStaffBonus(co.popularity) + (isPPVWeek ? 5 : 0)));
+            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread) + rivalStaffBonus(co.popularity, hiredStaffSkills) + (isPPVWeek ? 5 : 0)));
             showMatches.push({ a: a.name, b: b.name, winner: aWins ? a.name : b.name, rating: rivalRating });
           }
           if (showMatches.length > 0) {
@@ -3662,10 +3702,14 @@ export default function BookedRingsideEmpire() {
       }
       // Staff candidate pool trickles over — a stale unhired candidate is
       // occasionally swapped for a freshly generated one of the same role,
-      // so the pool never fully dries up or goes stale long-term.
+      // so the pool never fully dries up or goes stale long-term. Only a
+      // genuinely free candidate (contractedTo === null) is eligible — rivals
+      // hire out of this same pool now, and a staffer actually under
+      // contract to someone (the player OR a rival) should never just
+      // vanish mid-contract.
       if (Math.random() < 0.15) {
         setStaffPool((sp) => {
-          const idx = sp.findIndex((s) => s.contractedTo !== "player");
+          const idx = sp.findIndex((s) => s.contractedTo === null);
           if (idx === -1) return sp;
           const replaced = [...sp];
           replaced[idx] = generateStaffCandidate(sp[idx].role, new Set(sp.map((s) => s.name)));
@@ -5548,7 +5592,7 @@ export default function BookedRingsideEmpire() {
 
                 <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">CANDIDATES</div>
                 <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
-                  {staffPool.filter((s) => s.role === role.key && s.contractedTo !== "player").map((s) => (
+                  {staffPool.filter((s) => s.role === role.key && s.contractedTo === null).map((s) => (
                     <div key={s.id} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-bold text-sm">{s.name}</div>
@@ -5557,8 +5601,16 @@ export default function BookedRingsideEmpire() {
                       <div className="text-[10px] text-[#8B8593] mt-1">Skill {s.skill} &middot; £{staffWeeklyWage(s.skill).toLocaleString()}/wk</div>
                     </div>
                   ))}
-                  {staffPool.filter((s) => s.role === role.key && s.contractedTo !== "player").length === 0 && (
-                    <div className="text-xs text-[#8B8593] italic col-span-2">No candidates available right now — check back after a few weeks.</div>
+                  {/* Rivals compete for the same pool — shown greyed-out, not just
+                      silently missing, so it's visible that someone else got there first. */}
+                  {staffPool.filter((s) => s.role === role.key && s.contractedTo && s.contractedTo !== "player").map((s) => (
+                    <div key={s.id} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3 opacity-50">
+                      <div className="font-bold text-sm">{s.name}</div>
+                      <div className="text-[10px] text-[#8B8593] mt-1">Skill {s.skill} &middot; hired by {rivalCompanies.find((c) => c.id === s.contractedTo)?.name || "a rival promotion"}</div>
+                    </div>
+                  ))}
+                  {staffPool.filter((s) => s.role === role.key && s.contractedTo === null).length === 0 && (
+                    <div className="text-xs text-[#8B8593] italic col-span-2">No free candidates right now — check back after a few weeks.</div>
                   )}
                 </div>
               </div>
@@ -5644,6 +5696,7 @@ export default function BookedRingsideEmpire() {
           const co = rivalCompanies.find((c) => c.id === viewingCompany.id) || viewingCompany;
           const signedRoster = pool.filter((w) => w.contractedTo === co.id);
           const signedNames = new Set(signedRoster.map((w) => w.name));
+          const rivalHiredStaff = staffPool.filter((s) => s.contractedTo === co.id);
           const champ = rivalTitles.find((t) => t.companyId === co.id);
           const coStables = stables.filter((s) => s.members.slice(0, 2).length === 2 && s.members.slice(0, 2).every((n) => signedNames.has(n)));
           return (
@@ -5662,7 +5715,7 @@ export default function BookedRingsideEmpire() {
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">FUNDS</div><div className="font-bold booked-mono" style={{ color: "var(--gold)" }}>£{Math.round(co.funds).toLocaleString()}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">SHOWS RUN</div><div className="font-bold">{co.showsRun}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">CHAMPION</div><div className="font-bold">{champ?.holder || "Vacant"}</div></div>
-                <div className="bg-[#131117] rounded-lg p-2.5" title="Backstage staff quality — agents, trainers, production — scales with how big the promotion already is, same idea as your own Staff screen."><div className="text-[9px] text-[#8B8593]">PRODUCTION</div><div className="font-bold">{rivalProductionLabel(co.popularity)}</div></div>
+                <div className="bg-[#131117] rounded-lg p-2.5" title="Backstage staff quality — they hire and lose people from the same candidate pool you do, so this moves over time rather than just tracking their size."><div className="text-[9px] text-[#8B8593]">PRODUCTION</div><div className="font-bold">{rivalProductionLabel(rivalStaffBonus(co.popularity, rivalHiredStaff.map((s) => s.skill)))} <span className="text-[9px] text-[#8B8593] font-normal">({rivalHiredStaff.length}/{STAFF_ROLES.length} roles)</span></div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5" title="Their typical show length — bigger promotions run longer, more match-heavy cards."><div className="text-[9px] text-[#8B8593]">SHOW LENGTH</div><div className="font-bold">~{rivalShowMinutes(co.popularity)} min</div></div>
               </div>
 
