@@ -165,6 +165,11 @@ const ARENAS = [
   { name: "Large", crowdMin: 2750, crowdMax: 20000, ticketMin: 45, ticketMax: 65, cost: 12000, minTier: "National", showMinutes: 75 },
   { name: "Major Arena", crowdMin: 15000, crowdMax: 32000, ticketMin: 60, ticketMax: 80, cost: 20000, minTier: "International", showMinutes: 90 },
 ];
+// Bounds for the player-editable show-length slider — a venue's own
+// showMinutes is just the default it suggests, not a hard cap.
+const SHOW_MINUTES_MIN = 15;
+const SHOW_MINUTES_MAX = 180;
+const SHOW_MINUTES_STEP = 5;
 
 // Booking is a time-budgeted running order (segments: matches or angles),
 // not fixed slots — a segment's quality ceiling is set by where it sits in
@@ -1076,6 +1081,15 @@ const RIVAL_PRODUCTION_LABELS = { Unknown: "Minimal", Local: "Basic", Regional: 
 function rivalProductionLabel(popularity) {
   return RIVAL_PRODUCTION_LABELS[popularityTier(popularity)];
 }
+// Every rival's own typical show length — a base template, same idea as the
+// player's own venue-suggested default, derived straight from popularity so
+// it automatically applies to any custom/imported company too (nothing to
+// fill in on upload). Feeds both their detail-page flavor and how many
+// matches they simulate on a given week (a longer show has more room).
+const RIVAL_SHOW_MINUTES = { Unknown: 30, Local: 45, Regional: 60, National: 90, International: 120 };
+function rivalShowMinutes(popularity) {
+  return RIVAL_SHOW_MINUTES[popularityTier(popularity)];
+}
 // Founding a developmental feeder promotion is a real investment, not a free
 // toggle — building out a training facility and a second roster costs more
 // the bigger you already are.
@@ -1716,6 +1730,11 @@ export default function BookedRingsideEmpire() {
   const [arenaIdx, setArenaIdx] = useState(0);
   const arena = ARENAS[arenaIdx];
   const [ticketPrice, setTicketPrice] = useState(arena.ticketMin);
+  // Show length defaults to the venue's typical runtime but is always the
+  // player's call — a quick house show at a big arena, or a long flagship
+  // card at a small one, are both legitimate choices. SHOW_MINUTES_MIN/MAX
+  // bound the slider; venue choice just sets a sensible starting point.
+  const [showMinutesTarget, setShowMinutesTarget] = useState(arena.showMinutes);
   // Show level — which half of a split roster this week's card can draw from.
   // A Developmental show is capped to the smaller venues regardless of company
   // tier, since it's a lower-profile card by design, not a full flagship show.
@@ -1769,6 +1788,7 @@ export default function BookedRingsideEmpire() {
   const [newTemplateIntervalWeeks, setNewTemplateIntervalWeeks] = useState(1);
   const [newTemplateDayOfWeek, setNewTemplateDayOfWeek] = useState("Monday");
   const [newTemplatePreferredCity, setNewTemplatePreferredCity] = useState("");
+  const [newTemplateShowMinutes, setNewTemplateShowMinutes] = useState(ARENAS[0].showMinutes);
   const [financeHistory, setFinanceHistory] = useState([{ weekNumber: 0, year: 1, weekOfYear: 0, bank: 20000 }]);
   const [universeFeed, setUniverseFeed] = useState([]);
   const [storylines, setStorylines] = useState({}); // "nameA|nameB" (sorted) -> { intensity, matchesFought }
@@ -1812,6 +1832,7 @@ export default function BookedRingsideEmpire() {
       id: `tmpl-${Date.now()}`, name: newTemplateName.trim(), level: newTemplateLevel,
       arenaIdx: newTemplateArenaIdx, intervalWeeks: Math.max(1, newTemplateIntervalWeeks),
       nextWeekNumber: weekNumber, dayOfWeek: newTemplateDayOfWeek, preferredCity: newTemplatePreferredCity || null,
+      showMinutes: newTemplateShowMinutes,
     }]);
     // A brand-new template due immediately (this week) won't be picked up by
     // the week-change effect, since weekNumber itself hasn't changed — apply
@@ -1819,9 +1840,10 @@ export default function BookedRingsideEmpire() {
     setShowLevel(newTemplateLevel);
     setArenaIdx(newTemplateArenaIdx);
     setTicketPrice(ARENAS[newTemplateArenaIdx].ticketMin);
+    setShowMinutesTarget(newTemplateShowMinutes);
     if (newTemplatePreferredCity) setCity(newTemplatePreferredCity);
     setNewTemplateName(""); setNewTemplateLevel("main"); setNewTemplateArenaIdx(0); setNewTemplateIntervalWeeks(1);
-    setNewTemplateDayOfWeek("Monday"); setNewTemplatePreferredCity("");
+    setNewTemplateDayOfWeek("Monday"); setNewTemplatePreferredCity(""); setNewTemplateShowMinutes(ARENAS[0].showMinutes);
   };
   const removeEventTemplate = (id) => {
     setEventTemplates((ts) => ts.filter((t) => t.id !== id));
@@ -2623,14 +2645,14 @@ export default function BookedRingsideEmpire() {
       // None of this applies to a skipped week — there's no show to be
       // underbooked, so no penalty for not running one here either.
       const usedShowMinutes = showRan ? segments.filter((s) => s.result).reduce((sum, s) => sum + s.minutes, 0) : 0;
-      const shortfallFrac = showRan ? Math.max(0, (arena.showMinutes - usedShowMinutes) / arena.showMinutes) : 0;
+      const shortfallFrac = showRan ? Math.max(0, (showMinutesTarget - usedShowMinutes) / showMinutesTarget) : 0;
       let underbookedPenaltyNote = null;
       if (showRan && showLevel === "main" && shortfallFrac > 0 && TIER_RANK[popularityTier(popularity)] >= TIER_RANK.National) {
         const ratingHit = Math.round(shortfallFrac * 40);
         const cashHit = Math.round(shortfallFrac * 3750);
         fullRating = Math.max(0, fullRating - ratingHit);
         profit -= cashHit;
-        underbookedPenaltyNote = `Fans expected a full ${arena.showMinutes}-minute card at your level — only using ${usedShowMinutes} min cost you £${cashHit.toLocaleString()} and knocked the show rating down.`;
+        underbookedPenaltyNote = `Fans expected a full ${showMinutesTarget}-minute card at your level — only using ${usedShowMinutes} min cost you £${cashHit.toLocaleString()} and knocked the show rating down.`;
       }
 
       // Merchandise — stock persists across shows rather than being bought fresh
@@ -3083,7 +3105,8 @@ export default function BookedRingsideEmpire() {
         const combined = [...signedRoster, ...freelancePicks];
         if (combined.length >= 2 && Math.random() < RIVAL_SHOW_CHANCE) {
           const shuffled = [...combined].sort(() => Math.random() - 0.5);
-          const pairCount = Math.min(Math.floor(shuffled.length / 2), rand(1, 2));
+          const maxPairsForLength = Math.max(1, Math.round(rivalShowMinutes(co.popularity) / 30));
+          const pairCount = Math.min(Math.floor(shuffled.length / 2), rand(1, maxPairsForLength));
           const showMatches = [];
           for (let i = 0; i < pairCount; i++) {
             const a = shuffled[i * 2], b = shuffled[i * 2 + 1];
@@ -3842,6 +3865,7 @@ export default function BookedRingsideEmpire() {
       setShowLevel(due.level);
       setArenaIdx(due.arenaIdx);
       setTicketPrice(ARENAS[due.arenaIdx].ticketMin);
+      setShowMinutesTarget(due.showMinutes || ARENAS[due.arenaIdx].showMinutes);
       if (due.preferredCity) setCity(due.preferredCity);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3902,6 +3926,7 @@ export default function BookedRingsideEmpire() {
     setRequests([]);
     setPeakPopularity(0);
     setArenaIdx(1);
+    setShowMinutesTarget(ARENAS[1].showMinutes);
     setCity(null);
     setStartingCity(null);
     setMerchStock(0); setMerchQualityTier(0); setWrestlerMerchSales({});
@@ -5082,7 +5107,7 @@ export default function BookedRingsideEmpire() {
                         <div>
                           <div className="text-xs font-semibold">{t.name} {networkDeal?.eventTemplateId === t.id && <Tv size={11} className="inline text-[#8B6BC0] ml-1" />}</div>
                           <div className="text-[9px] text-[#8B8593]">
-                            {t.level === "main" ? "Main Roster" : "Developmental"} &middot; {ARENAS[t.arenaIdx].name}{t.preferredCity ? ` (${t.preferredCity})` : ""} &middot; {t.dayOfWeek || "Monday"}s &middot; every {t.intervalWeeks} week(s) &middot; next: {formatDate(addWeeks(START_DATE, t.nextWeekNumber - 1))}{t.nextWeekNumber <= weekNumber ? " (this week)" : ""}
+                            {t.level === "main" ? "Main Roster" : "Developmental"} &middot; {ARENAS[t.arenaIdx].name} &middot; {t.showMinutes || ARENAS[t.arenaIdx].showMinutes} min{t.preferredCity ? ` (${t.preferredCity})` : ""} &middot; {t.dayOfWeek || "Monday"}s &middot; every {t.intervalWeeks} week(s) &middot; next: {formatDate(addWeeks(START_DATE, t.nextWeekNumber - 1))}{t.nextWeekNumber <= weekNumber ? " (this week)" : ""}
                           </div>
                         </div>
                         <button onClick={() => removeEventTemplate(t.id)} className="text-[#8B8593] hover:text-red-400"><X size={14} /></button>
@@ -5122,6 +5147,9 @@ export default function BookedRingsideEmpire() {
                 })}
                 <select value={newTemplateArenaIdx} onChange={(e) => setNewTemplateArenaIdx(Number(e.target.value))} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
                   {ARENAS.map((ar, i) => <option key={ar.name} value={i}>{ar.name}</option>)}
+                </select>
+                <select value={newTemplateShowMinutes} onChange={(e) => setNewTemplateShowMinutes(Number(e.target.value))} title="How long this show runs — independent of venue; a weekly TV show and a monthly PPV can use the same venue but very different runtimes." className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
+                  {[15, 30, 45, 60, 90, 120, 150, 180].map((m) => <option key={m} value={m}>{m} min</option>)}
                 </select>
                 <select value={newTemplateIntervalWeeks} onChange={(e) => setNewTemplateIntervalWeeks(Number(e.target.value))} className="bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
                   <option value={1}>Weekly</option>
@@ -5538,12 +5566,13 @@ export default function BookedRingsideEmpire() {
                   <div className="text-[10px] text-[#8B8593]">{popularityTier(co.popularity)} &middot; Score {Math.round(co.popularity)}</div>
                 </div>
               </div>
-              <div className="grid grid-cols-2 dt:grid-cols-5 gap-2 mb-3 text-xs">
+              <div className="grid grid-cols-2 dt:grid-cols-6 gap-2 mb-3 text-xs">
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">BOOKER</div><div className="font-bold">{co.bookerName}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">FUNDS</div><div className="font-bold booked-mono" style={{ color: "var(--gold)" }}>£{Math.round(co.funds).toLocaleString()}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">SHOWS RUN</div><div className="font-bold">{co.showsRun}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">CHAMPION</div><div className="font-bold">{champ?.holder || "Vacant"}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5" title="Backstage staff quality — agents, trainers, production — scales with how big the promotion already is, same idea as your own Staff screen."><div className="text-[9px] text-[#8B8593]">PRODUCTION</div><div className="font-bold">{rivalProductionLabel(co.popularity)}</div></div>
+                <div className="bg-[#131117] rounded-lg p-2.5" title="Their typical show length — bigger promotions run longer, more match-heavy cards."><div className="text-[9px] text-[#8B8593]">SHOW LENGTH</div><div className="font-bold">~{rivalShowMinutes(co.popularity)} min</div></div>
               </div>
 
               {co.acquired ? (
@@ -5759,7 +5788,7 @@ export default function BookedRingsideEmpire() {
                         <button
                           key={lvl}
                           disabled={devLocked}
-                          onClick={() => { if (devLocked) return; setShowLevel(lvl); if (lvl === "developmental" && arenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX) { setArenaIdx(0); setTicketPrice(ARENAS[0].ticketMin); } }}
+                          onClick={() => { if (devLocked) return; setShowLevel(lvl); if (lvl === "developmental" && arenaIdx > DEVELOPMENTAL_MAX_ARENA_IDX) { setArenaIdx(0); setTicketPrice(ARENAS[0].ticketMin); setShowMinutesTarget(ARENAS[0].showMinutes); } }}
                           className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${devLocked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : showLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"}`}
                           style={!devLocked && showLevel === lvl ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}
                         >
@@ -5791,7 +5820,7 @@ export default function BookedRingsideEmpire() {
                     return (
                       <button
                         key={ar.name}
-                        onClick={() => { if (locked) return; setArenaIdx(i); setTicketPrice(ar.ticketMin); }}
+                        onClick={() => { if (locked) return; setArenaIdx(i); setTicketPrice(ar.ticketMin); setShowMinutesTarget(ar.showMinutes); }}
                         disabled={locked}
                         className={`px-3 py-1.5 rounded text-[11px] font-bold tracking-wide border ${
                           locked ? "border-[#2B2733] text-[#5A5660] cursor-not-allowed" : i === arenaIdx ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"
@@ -5855,6 +5884,11 @@ export default function BookedRingsideEmpire() {
                 <div className="flex justify-between text-[10px] text-[#8B8593] mb-1"><span>TICKET PRICE</span><span className="text-[#F2ECDD] font-bold">£{ticketPrice}</span></div>
                 <input type="range" min={arena.ticketMin} max={arena.ticketMax} value={ticketPrice} onChange={(e) => setTicketPrice(Number(e.target.value))} className="w-full accent-[#8B6BC0]" />
               </div>
+              <div className="mb-3">
+                <div className="flex justify-between text-[10px] text-[#8B8593] mb-1"><span>SHOW LENGTH</span><span className="text-[#F2ECDD] font-bold">{showMinutesTarget} min</span></div>
+                <input type="range" min={SHOW_MINUTES_MIN} max={SHOW_MINUTES_MAX} step={SHOW_MINUTES_STEP} value={showMinutesTarget} onChange={(e) => setShowMinutesTarget(Number(e.target.value))} className="w-full accent-[#8B6BC0]" />
+                <div className="text-[9px] text-[#8B8593] mt-1">Your call — a quick {arena.name.toLowerCase()} taping or an extended flagship card with more room to tell the story. {arena.name} usually runs {arena.showMinutes} min.</div>
+              </div>
               {popularity >= MERCH_UNLOCK_POPULARITY && (
                 <div className="flex items-center justify-between bg-[#131117] rounded-lg px-3 py-2 text-[11px] mb-3">
                   <span className="text-[#8B8593]">Merch stock on hand</span>
@@ -5873,12 +5907,12 @@ export default function BookedRingsideEmpire() {
               <div className="mt-3">
                 <div className="flex justify-between text-[10px] text-[#8B8593] mb-1">
                   <span>SHOW TIME</span>
-                  <span className={totalShowMinutes > arena.showMinutes ? "text-red-400 font-bold" : "text-[#F2ECDD] font-bold"}>{totalShowMinutes} / {arena.showMinutes} min</span>
+                  <span className={totalShowMinutes > showMinutesTarget ? "text-red-400 font-bold" : "text-[#F2ECDD] font-bold"}>{totalShowMinutes} / {showMinutesTarget} min</span>
                 </div>
                 <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
-                  <div className="h-full" style={{ width: `${Math.min(100, (totalShowMinutes / arena.showMinutes) * 100)}%`, backgroundColor: totalShowMinutes > arena.showMinutes ? "#EF4444" : "#8B6BC0" }} />
+                  <div className="h-full" style={{ width: `${Math.min(100, (totalShowMinutes / showMinutesTarget) * 100)}%`, backgroundColor: totalShowMinutes > showMinutesTarget ? "#EF4444" : "#8B6BC0" }} />
                 </div>
-                {totalShowMinutes > arena.showMinutes && <div className="text-[9px] text-red-400 mt-1">Over the venue's time budget — trim a segment's minutes or remove one.</div>}
+                {totalShowMinutes > showMinutesTarget && <div className="text-[9px] text-red-400 mt-1">Over your show's time budget — trim a segment's minutes, remove one, or extend the show length.</div>}
               </div>
             </div>
 
@@ -6156,10 +6190,10 @@ export default function BookedRingsideEmpire() {
                   <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">SHOW TIME</div>
                   <div className="flex justify-between text-[10px] text-[#8B8593] mb-1">
                     <span>Booked</span>
-                    <span className={totalShowMinutes > arena.showMinutes ? "text-red-400 font-bold" : "text-[#F2ECDD] font-bold"}>{totalShowMinutes} / {arena.showMinutes} min</span>
+                    <span className={totalShowMinutes > showMinutesTarget ? "text-red-400 font-bold" : "text-[#F2ECDD] font-bold"}>{totalShowMinutes} / {showMinutesTarget} min</span>
                   </div>
                   <div className="h-1.5 bg-[#232029] rounded-full overflow-hidden">
-                    <div className="h-full" style={{ width: `${Math.min(100, (totalShowMinutes / arena.showMinutes) * 100)}%`, backgroundColor: totalShowMinutes > arena.showMinutes ? "#EF4444" : "#8B6BC0" }} />
+                    <div className="h-full" style={{ width: `${Math.min(100, (totalShowMinutes / showMinutesTarget) * 100)}%`, backgroundColor: totalShowMinutes > showMinutesTarget ? "#EF4444" : "#8B6BC0" }} />
                   </div>
                   <div className="text-[9px] text-[#8B8593] mt-2">{segments.length} segment{segments.length === 1 ? "" : "s"} booked at {arena.name}</div>
                 </div>
@@ -6185,8 +6219,8 @@ export default function BookedRingsideEmpire() {
             </div>
 
             {(() => {
-              if (showLevel !== "main" || totalShowMinutes >= arena.showMinutes || TIER_RANK[popularityTier(popularity)] < TIER_RANK.National) return null;
-              return <div className="text-[10px] text-red-300 mb-2">Fans at your level expect a full card — only using {totalShowMinutes} of {arena.showMinutes} min will cost you rating and money.</div>;
+              if (showLevel !== "main" || totalShowMinutes >= showMinutesTarget || TIER_RANK[popularityTier(popularity)] < TIER_RANK.National) return null;
+              return <div className="text-[10px] text-red-300 mb-2">Fans at your level expect a full card — only using {totalShowMinutes} of {showMinutesTarget} min will cost you rating and money.</div>;
             })()}
             {runShowError && (
               <div className="bg-[#2A1414] border border-red-500 rounded-lg p-3 text-xs mb-2">
