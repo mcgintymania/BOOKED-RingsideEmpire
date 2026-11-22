@@ -302,6 +302,7 @@ const STAFF_ROLES = [
   { key: "medical", label: "Medical Staff", desc: "Reduces how often wrestlers get hurt on your shows, and shortens recovery time when they do." },
   { key: "ringcrew", label: "Ring Crew", desc: "Handles setup, safety, and show presentation — a sharp crew cuts down on costly on-site mishaps." },
   { key: "booker", label: "Assistant Booker", desc: "A second set of eyes across the whole card — a strong assistant nudges every show's overall rating up a little." },
+  { key: "trainer", label: "Trainer", desc: "Coaches your Developmental prospects directly — the better the trainer, the faster they close the gap to their potential." },
 ];
 function staffWeeklyWage(skill) {
   if (skill <= 20) return 200;
@@ -2186,6 +2187,7 @@ export default function BookedRingsideEmpire() {
   const bestMedicalSkill = bestStaffSkill("medical");
   const bestRingCrewSkill = bestStaffSkill("ringcrew");
   const bestBookerSkill = bestStaffSkill("booker");
+  const bestTrainerSkill = bestStaffSkill("trainer");
   // Agents and a sharp referee raise the ceiling a match can realistically hit;
   // an assistant booker's contribution is smaller and show-wide rather than
   // per-match. Caps at +12 total with max skill across all three roles.
@@ -3206,22 +3208,39 @@ export default function BookedRingsideEmpire() {
 
           // Developmental training — exclusive talent assigned to the feeder
           // promotion trains toward their potential every week, faster (and
-          // more reliably) on a week they actually got ring time. Growth
-          // stops once they've closed the gap — that's what "developed" means.
-          if (aged.contractedTo === "player" && aged.rosterLevel === "developmental") {
+          // more reliably) on a week they actually got ring time. A hired
+          // Trainer raises the base odds; being booked against a notably
+          // more experienced opponent (bring in a veteran per-use name to
+          // work with your prospects) adds an extra growth tick on top,
+          // win or lose. Growth stops once they've closed the gap — that's
+          // what "developed" means. wasBelowPotential is captured here and
+          // checked again at the very end of this wrestler's processing
+          // (after aging etc.), so a crossing that a different same-week
+          // mutation happens to complete still gets reported.
+          const inDevelopmental = aged.contractedTo === "player" && aged.rosterLevel === "developmental";
+          const wasBelowPotential = inDevelopmental && avgStats(aged) < potentialOf(aged) - 0.5;
+          if (wasBelowPotential) {
             const pot = potentialOf(aged);
-            const avgBefore = avgStats(aged);
-            if (avgBefore < pot - 0.5) {
-              const gotRingTime = !!inMatch || !!segmentObj;
-              if (Math.random() < (gotRingTime ? 0.85 : 0.5)) {
-                const growCount = gotRingTime && Math.random() < 0.4 ? 2 : 1;
-                for (let g = 0; g < growCount; g++) {
-                  const statKey = PERFORMANCE_STAT_KEYS[rand(0, PERFORMANCE_STAT_KEYS.length - 1)];
-                  aged = { ...aged, [statKey]: clamp(aged[statKey] + rand(1, 3), 0, 100) };
-                }
-                aged = { ...aged, tier: tierFromAvg(avgStats(aged)) };
-                if (avgStats(aged) >= pot - 0.5) developmentBreakoutNames.push(aged.name);
+            const gotRingTime = !!inMatch || !!segmentObj;
+            let workedWithVeteran = false;
+            if (inMatch) {
+              const onTeam1 = inMatch.team1.some((x) => x.name === aged.name);
+              const opponentTeam = onTeam1 ? inMatch.team2 : inMatch.team1;
+              const opponentAvgAttr = opponentTeam.length ? opponentTeam.reduce((s, x) => s + attrOf(x), 0) / opponentTeam.length : 0;
+              workedWithVeteran = opponentAvgAttr - attrOf(aged) >= 20;
+            }
+            const trainerChanceBonus = (bestTrainerSkill / 100) * 0.12;
+            const chance = Math.min(0.97, (gotRingTime ? 0.85 : 0.5) + trainerChanceBonus);
+            if (Math.random() < chance) {
+              const doubleChance = 0.4 + (bestTrainerSkill / 100) * 0.3;
+              let growCount = gotRingTime && Math.random() < doubleChance ? 2 : 1;
+              if (workedWithVeteran) growCount += 1;
+              growCount = Math.min(3, growCount);
+              for (let g = 0; g < growCount; g++) {
+                const statKey = PERFORMANCE_STAT_KEYS[rand(0, PERFORMANCE_STAT_KEYS.length - 1)];
+                aged = { ...aged, [statKey]: clamp(aged[statKey] + rand(1, 3), 0, 100) };
               }
+              aged = { ...aged, tier: tierFromAvg(avgStats(aged)) };
             }
           }
 
@@ -3247,6 +3266,9 @@ export default function BookedRingsideEmpire() {
               }
             }
           }
+          if (wasBelowPotential && aged.rosterLevel === "developmental" && avgStats(aged) >= potentialOf(aged) - 0.5) {
+            developmentBreakoutNames.push(aged.name);
+          }
           return aged;
         });
         if (poolWithGrowth) next = [...next, ...poolWithGrowth];
@@ -3254,13 +3276,17 @@ export default function BookedRingsideEmpire() {
           const retiringNames = new Set(retiringWrestlers.map((r) => r.name));
           next = next.filter((w) => !retiringNames.has(w.name));
         }
+        // Posted from inside this updater, not after calling setPool, since
+        // a functional setState update isn't guaranteed to run synchronously
+        // at the call site — this is the only point where developmentBreakoutNames
+        // is reliably populated when this code actually executes.
+        if (developmentBreakoutNames.length > 0) {
+          setUniverseFeed((feed) => [...developmentBreakoutNames.map((name, i) => ({ id: `dev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${name} has developed into a legitimate prospect — they've outgrown what Developmental can teach them and are ready for the main roster.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
+        }
         return next;
       });
       if (injuryNewsEntries.length > 0) {
         setUniverseFeed((feed) => [...injuryNewsEntries.map((e, i) => ({ id: `inj-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "injury", companyId: e.companyId })), ...feed].slice(0, 300));
-      }
-      if (developmentBreakoutNames.length > 0) {
-        setUniverseFeed((feed) => [...developmentBreakoutNames.map((name, i) => ({ id: `dev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${name} has developed into a legitimate prospect — they've outgrown what Developmental can teach them and are ready for the main roster.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
       }
       if (newlyInjuredNames.length > 0) {
         // Check the titles themselves directly by holder name — simpler and more
@@ -5179,6 +5205,7 @@ export default function BookedRingsideEmpire() {
               <div className="flex justify-between"><span className="text-[#8B8593]">Match rating bonus</span><span className="font-bold text-[#8B6BC0]">+{staffRatingBonus}</span></div>
               <div className="flex justify-between"><span className="text-[#8B8593]">Injury chance</span><span className="font-bold text-[#8B6BC0]">&minus;{Math.round((1 - medicalInjuryFactor) * 100)}%</span></div>
               <div className="flex justify-between"><span className="text-[#8B8593]">Catastrophe chance</span><span className="font-bold text-[#8B6BC0]">&minus;{Math.round((1 - ringCrewCatastropheFactor) * 100)}%</span></div>
+              <div className="flex justify-between"><span className="text-[#8B8593]">Developmental growth odds</span><span className="font-bold text-[#8B6BC0]">+{Math.round((bestTrainerSkill / 100) * 12)}pp</span></div>
               <div className="flex justify-between"><span className="text-[#8B8593]">Staff payroll (weekly)</span><span className="font-bold">£{staffWeeklyPayroll.toLocaleString()}</span></div>
             </div>
 
@@ -5290,7 +5317,7 @@ export default function BookedRingsideEmpire() {
                     <div className="text-[10px] text-[#8B8593]">
                       Founded Y{yearOf(feederCompany.foundedWeek)} Wk{weekOfYear(feederCompany.foundedWeek)} &middot; Roster: {feederRosterSize} &middot; Shows run: {feederShows.length} &middot; Avg. rating: {avgRating}
                     </div>
-                    <div className="text-[9px] text-[#8B8593] italic mt-1">Built from shows booked at the Developmental level — manage it from Book &middot; Show Level and Roster &middot; Developmental. Anyone assigned there trains toward their potential every week, faster if you actually book them — check their Roster card for progress.</div>
+                    <div className="text-[9px] text-[#8B8593] italic mt-1">Built from shows booked at the Developmental level — manage it from Book &middot; Show Level and Roster &middot; Developmental. Anyone assigned there trains toward their potential every week, faster if you actually book them — booking them against a noticeably more experienced opponent (bring in a veteran per-use name) adds an extra boost, and a hired Trainer (Staff) raises the odds every week. Check their Roster card for progress.</div>
                   </div>
                 </div>
               );
