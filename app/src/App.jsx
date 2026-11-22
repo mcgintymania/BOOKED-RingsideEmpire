@@ -1417,6 +1417,13 @@ export default function BookedRingsideEmpire() {
 
   const [pool, setPool] = useState(buildInitialPool);
   const [rivalCompanies, setRivalCompanies] = useState(() => RIVAL_COMPANIES.map((c, i) => ({ ...c, funds: RIVAL_STARTING_FUNDS[i] ?? 25000, showsRun: 0, lastTier: popularityTier(c.popularity) })));
+  // Inter-promotion M&A — working agreements (ids of rivals you've struck a deal
+  // with; their signed talent becomes bookable alongside your own, no fee) and
+  // outright acquisitions (co.acquired: true — AI simulation stops for them,
+  // their roster frees up, and they're shown as owned rather than active).
+  const [workingAgreements, setWorkingAgreements] = useState([]); // rival company ids
+  const [feederCompany, setFeederCompany] = useState(null); // { name, foundedWeek }
+  const [newFeederName, setNewFeederName] = useState("");
   const [playerLastTier, setPlayerLastTier] = useState("Unknown");
   const [rivalTitles, setRivalTitles] = useState(() => RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: _initialChampions[c.id] || null, reignStartWeek: _initialChampions[c.id] ? 1 : null })));
   const [nextReserveIndex, setNextReserveIndex] = useState(0);
@@ -1437,6 +1444,7 @@ export default function BookedRingsideEmpire() {
   const [hireResult, setHireResult] = useState(null);
   const [extendingTarget, setExtendingTarget] = useState(null);
   const [firingTarget, setFiringTarget] = useState(null);
+  const [acquiringTarget, setAcquiringTarget] = useState(null);
   const [extendWeeks, setExtendWeeks] = useState(26);
   const [extendResult, setExtendResult] = useState(null);
   const [financeYear, setFinanceYear] = useState(1);
@@ -1609,7 +1617,10 @@ export default function BookedRingsideEmpire() {
   const perUseWrestlers = pool.filter((w) => w.contractedTo === null && perUseRoster.includes(w.name));
   // Freelancers are open to either level — only the exclusive roster is split.
   const levelRoster = roster.filter((w) => (w.rosterLevel || "main") === showLevel);
-  const bookable = [...levelRoster, ...perUseWrestlers].filter((w) => !w.injuryWeeksRemaining);
+  // A working agreement opens up a partner's signed roster as guest talent —
+  // bookable alongside your own, no per-appearance fee (the benefit of the deal).
+  const agreementRoster = pool.filter((w) => workingAgreements.includes(w.contractedTo));
+  const bookable = [...levelRoster, ...perUseWrestlers, ...agreementRoster].filter((w) => !w.injuryWeeksRemaining);
 
   const renameWrestler = (oldName, newName) => {
     setPool((p) => p.map((w) => (w.name === oldName ? { ...w, name: newName } : w)));
@@ -1663,6 +1674,40 @@ export default function BookedRingsideEmpire() {
   // Show-level roster split — which card a signed wrestler is eligible for.
   // Defaults to "main" for anyone without one set (older saves included).
   const setRosterLevel = (name, level) => setPool((p) => p.map((w) => (w.name === name ? { ...w, rosterLevel: level } : w)));
+
+  // Inter-promotion M&A — buying a rival outright, working agreements, and a
+  // developmental feeder promotion of your own.
+  const companyPurchaseCost = (co) => Math.round(co.funds * 2 + co.popularity * 8000);
+  const acquireCompany = (co) => {
+    const cost = companyPurchaseCost(co);
+    if (bank < cost || co.acquired) return;
+    setBank((b) => b - cost);
+    setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - cost }]);
+    setRivalCompanies((cs) => cs.map((c) => (c.id === co.id ? { ...c, acquired: true } : c)));
+    setWorkingAgreements((ids) => ids.filter((id) => id !== co.id));
+    setPool((p) => p.map((w) => (w.contractedTo === co.id ? { ...w, contractedTo: null, contractExpiresWeek: null, hireCooldownUntil: null } : w)));
+    setRivalTitles((ts) => ts.filter((t) => t.companyId !== co.id));
+    setUniverseFeed((feed) => [{ id: `acq-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has acquired ${co.name}! Their signed roster is now available as free agents.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
+  };
+  // A major promotion wouldn't bother working with a tiny local indie, and a
+  // struggling local outfit has nothing a global giant needs — agreements only
+  // make sense between companies within a tier of each other.
+  const canProposeAgreement = (co) => !co.acquired && !workingAgreements.includes(co.id) && Math.abs(TIER_RANK[co.lastTier] - TIER_RANK[popularityTier(popularity)]) <= 1;
+  const proposeAgreement = (co) => {
+    if (!canProposeAgreement(co)) return;
+    setWorkingAgreements((ids) => [...ids, co.id]);
+    setUniverseFeed((feed) => [{ id: `wa-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has struck a working agreement with ${co.name} — their signed talent can now be booked as guest appearances, no fee.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
+  };
+  const endAgreement = (co) => {
+    setWorkingAgreements((ids) => ids.filter((id) => id !== co.id));
+    setUniverseFeed((feed) => [{ id: `wae-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `The working agreement between ${companyName} and ${co.name} has ended.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
+  };
+  const foundFeederCompany = () => {
+    if (!newFeederName.trim() || feederCompany) return;
+    setFeederCompany({ name: newFeederName.trim(), foundedWeek: weekNumber });
+    setUniverseFeed((feed) => [{ id: `feeder-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has founded ${newFeederName.trim()} as a developmental feeder promotion. Shows booked at the Developmental level now build its reputation.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
+    setNewFeederName("");
+  };
 
   const startNegotiating = (w) => {
     setNegotiatingTarget(w);
@@ -2437,6 +2482,9 @@ export default function BookedRingsideEmpire() {
       // the code right after it. This was very likely why hiring/crowning silently
       // failed to apply even though showsRun kept climbing.
       const newRivalCompanies = rivalCompanies.map((co) => {
+        // Acquired companies are yours now — no more independent hiring,
+        // firing, title drama, or popularity drift for them.
+        if (co.acquired) return co;
         // Symmetric drift (no permanent upward bias like before), damped further
         // as they approach the top — much harder to keep climbing near 100,
         // exactly like the player's own city growth curve.
@@ -2566,6 +2614,7 @@ export default function BookedRingsideEmpire() {
       const takenFreelancers = new Set(freelancersUsed);
       const newRivalShowRecords = [];
       rivalCompanies.forEach((co) => {
+        if (co.acquired) return;
         const signedRoster = pool.filter((w) => w.contractedTo === co.id && !w.injuryWeeksRemaining && !rivalPoolUpdates[w.name]);
         const availableFreelancers = pool.filter((w) => w.contractedTo === null && !w.injuryWeeksRemaining && !rivalPoolUpdates[w.name] && !takenFreelancers.has(w.name));
         let freelancePicks = [];
@@ -3038,7 +3087,7 @@ export default function BookedRingsideEmpire() {
     hasBeenFired, hasRetiredOnce, hasCreatedStableManually, hasCreatedRivalryManually,
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
-    scheduledEvents, eventTemplates,
+    scheduledEvents, eventTemplates, workingAgreements, feederCompany,
   });
 
   const applySaveSnapshot = (s) => {
@@ -3076,6 +3125,8 @@ export default function BookedRingsideEmpire() {
     setRecentMatchups(s.recentMatchups || []);
     setScheduledEvents(s.scheduledEvents || []);
     setEventTemplates(s.eventTemplates || []);
+    setWorkingAgreements(s.workingAgreements || []);
+    setFeederCompany(s.feederCompany || null);
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setShowResult(null); setGameOver(false); setTab("company");
@@ -3317,6 +3368,8 @@ export default function BookedRingsideEmpire() {
     setRecentMatchups([]);
     setScheduledEvents([]);
     setEventTemplates([]);
+    setWorkingAgreements([]);
+    setFeederCompany(null);
     setSegments([]);
     setNotes("");
     setTab("company");
@@ -4310,6 +4363,24 @@ export default function BookedRingsideEmpire() {
           </div>
         )}
 
+        {acquiringTarget && (
+          <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setAcquiringTarget(null)}>
+            <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
+              <div className="text-lg font-black mb-1" style={{ fontFamily: "Anton, sans-serif" }}>ACQUIRE {acquiringTarget.name.toUpperCase()}</div>
+              <div className="text-xs text-[#8B8593] mb-4">
+                This is permanent — {acquiringTarget.name} stops operating as a rival for good. Their signed roster becomes free agents you can sign. Cost:{" "}
+                <span className="font-bold booked-mono" style={{ color: "var(--gold)" }}>£{companyPurchaseCost(acquiringTarget).toLocaleString()}</span>.
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { acquireCompany(acquiringTarget); setAcquiringTarget(null); }} disabled={bank < companyPurchaseCost(acquiringTarget)} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
+                  Confirm Acquisition
+                </button>
+                <button onClick={() => setAcquiringTarget(null)} className="px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === "storylines" && (
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">STORYLINES</div>
@@ -4621,7 +4692,7 @@ export default function BookedRingsideEmpire() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] text-[#8B8593] w-4">#{i + 1}</span>
-                          <span className="font-bold text-sm">{co.name}{co.isPlayer && <span className="text-[10px] text-[#8B6BC0]"> (You)</span>}</span>
+                          <span className="font-bold text-sm">{co.name}{co.isPlayer && <span className="text-[10px] text-[#8B6BC0]"> (You)</span>}{co.acquired && <span className="text-[10px] text-[#8B6BC0]"> (Acquired by you)</span>}{workingAgreements.includes(co.id) && <span className="text-[10px] text-green-400"> (Working agreement)</span>}</span>
                         </div>
                         <span className="text-[11px] text-[#8B8593]">{popularityTier(co.popularity)} ({Math.round(co.popularity)})</span>
                       </div>
@@ -4633,11 +4704,33 @@ export default function BookedRingsideEmpire() {
                   );
                 })}
             </div>
+
+            {feederCompany && (() => {
+              const feederShows = showHistory.filter((r) => r.showLevel === "developmental");
+              const feederRosterSize = roster.filter((w) => w.rosterLevel === "developmental").length;
+              const avgRating = feederShows.length ? Math.round(feederShows.reduce((s, r) => s + r.fullRating, 0) / feederShows.length) : 0;
+              return (
+                <div className="mt-4">
+                  <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">YOUR FEEDER PROMOTION</div>
+                  <div className="bg-[#241B33] border border-[#5B3B8C] rounded-lg p-3">
+                    <div className="font-bold text-sm mb-1">{feederCompany.name}</div>
+                    <div className="text-[10px] text-[#8B8593]">
+                      Founded Y{yearOf(feederCompany.foundedWeek)} Wk{weekOfYear(feederCompany.foundedWeek)} &middot; Roster: {feederRosterSize} &middot; Shows run: {feederShows.length} &middot; Avg. rating: {avgRating}
+                    </div>
+                    <div className="text-[9px] text-[#8B8593] italic mt-1">Built from shows booked at the Developmental level — manage it from Book &middot; Show Level and Roster &middot; Developmental.</div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
         {tab === "promotions" && viewingCompany && (() => {
-          const co = viewingCompany;
+          // Re-derive from the live array by id — viewingCompany is a snapshot
+          // taken when the leaderboard row was clicked, so funds/showsRun/
+          // acquired status would otherwise go stale the moment an action
+          // here (acquire, propose/end agreement) changes the real data.
+          const co = rivalCompanies.find((c) => c.id === viewingCompany.id) || viewingCompany;
           const signedRoster = pool.filter((w) => w.contractedTo === co.id);
           const signedNames = new Set(signedRoster.map((w) => w.name));
           const champ = rivalTitles.find((t) => t.companyId === co.id);
@@ -4659,6 +4752,38 @@ export default function BookedRingsideEmpire() {
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">SHOWS RUN</div><div className="font-bold">{co.showsRun}</div></div>
                 <div className="bg-[#131117] rounded-lg p-2.5"><div className="text-[9px] text-[#8B8593]">CHAMPION</div><div className="font-bold">{champ?.holder || "Vacant"}</div></div>
               </div>
+
+              {co.acquired ? (
+                <div className="bg-[#241B33] border border-[#5B3B8C] rounded-lg p-3 text-xs mb-3 flex items-center gap-2">
+                  <Award size={14} className="text-[#8B6BC0]" /> Acquired by {companyName} — no longer an independent rival.
+                </div>
+              ) : (
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3 mb-3">
+                  <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">RELATIONSHIP</div>
+                  <div className="flex flex-wrap gap-2">
+                    {workingAgreements.includes(co.id) ? (
+                      <button onClick={() => endAgreement(co)} className="px-3 py-1.5 rounded text-[11px] font-bold border border-[#5B3B8C] bg-[#5B3B8C] text-[#F2ECDD]">
+                        End Working Agreement
+                      </button>
+                    ) : canProposeAgreement(co) ? (
+                      <button onClick={() => proposeAgreement(co)} className="px-3 py-1.5 rounded text-[11px] font-bold border border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#241B33]">
+                        Propose Working Agreement
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-[#8B8593] italic self-center">
+                        Too big a gap in status for a working agreement {popularityTier(co.popularity) !== popularityTier(popularity) ? `(they're ${popularityTier(co.popularity)}, you're ${popularityTier(popularity)})` : ""}
+                      </span>
+                    )}
+                    <button onClick={() => setAcquiringTarget(co)} disabled={bank < companyPurchaseCost(co)} className="px-3 py-1.5 rounded text-[11px] font-bold border border-red-900 text-red-300 hover:bg-red-950 disabled:opacity-40 disabled:cursor-not-allowed">
+                      Acquire (£{companyPurchaseCost(co).toLocaleString()})
+                    </button>
+                  </div>
+                  {workingAgreements.includes(co.id) && (
+                    <div className="text-[9px] text-[#8B8593] italic mt-2">Their signed roster can now be booked as guest talent on your shows, no fee.</div>
+                  )}
+                </div>
+              )}
+
               {coStables.length > 0 && (
                 <>
                   <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">TAG TEAMS</div>
@@ -5798,6 +5923,25 @@ export default function BookedRingsideEmpire() {
               <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">COMPANY</div>
               <div className="text-[10px] text-[#8B8593] mb-1">COMPANY NAME</div>
               <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} className="w-full border border-[#2B2733] rounded px-3 py-2 text-sm font-bold" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+            </div>
+
+            <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 mb-4">
+              <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-3">FEEDER PROMOTION</div>
+              {feederCompany ? (
+                <div className="text-xs text-[#8B8593]">
+                  <span className="text-[#F2ECDD] font-bold">{feederCompany.name}</span> — founded Y{yearOf(feederCompany.foundedWeek)} Wk{weekOfYear(feederCompany.foundedWeek)}. See it on the Promotions screen.
+                </div>
+              ) : (
+                <>
+                  <div className="text-[10px] text-[#8B8593] mb-3">Found a developmental promotion of your own, NXT-style — a one-time, permanent decision. It builds its reputation from whatever you book at the Developmental show level.</div>
+                  <div className="flex gap-2">
+                    <input value={newFeederName} onChange={(e) => setNewFeederName(e.target.value)} placeholder="e.g. Ringside Empire: Rise" className="flex-1 border border-[#2B2733] rounded px-3 py-2 text-sm" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
+                    <button onClick={foundFeederCompany} disabled={!newFeederName.trim()} className="px-4 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded">
+                      Found It
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
