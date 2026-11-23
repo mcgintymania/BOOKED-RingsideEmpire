@@ -1722,7 +1722,8 @@ const GUIDE_SECTIONS = [
   {
     key: "booking", title: "Booking a Show", icon: Building2,
     body: [
-      "Level, venue, city, length, and cadence are all set up once on Calendar · Show Events — Book just shows what's due that week and lets you set the ticket price, build the card, and run it. Higher prices mean fewer fans, and your reputation in that specific city sets the ceiling.",
+      "Level, venue, city, length, and cadence are all set up once on Calendar · Show Events — Book just shows what's due and lets you set the ticket price, build the card, and run it. Higher prices mean fewer fans, and your reputation in that specific city sets the ceiling.",
+      "More than one show can be due the same week — a weekly Raw and SmackDown on different days, plus a monthly or quarterly PPV-style show on top. They're worked through one at a time, in day-of-week order; after running one, Book moves straight on to whichever's next, and the calendar week itself only turns over once nothing else is left due. Weekly-recurring costs (roster/staff payroll, production upkeep, loan payment) are only billed once that week, on the last show, not once per show — the Show Costs panel tells you when that's not this one.",
       "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks. Touring abroad (New York, Mexico City, Tokyo) is gated separately, behind reaching National company tier — a venue is also locked by company tier on top of that (Backyard is always open, Major Arena needs Global).",
       "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
       "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, or Fatal 4-Way — plus three kinds of Angle, none of which have a winner/loser or cost energy: a Promo (solo mic work, rated on charisma, aim it at someone to nudge or spark a rivalry), a Confrontation (two people face to face, rated on both their charisma, with a real chance of boiling over into a physical swerve — a much bigger rivalry swing than a plain promo), or a Vignette (solo atmosphere-building rated on entertainment instead of charisma, no subject).",
@@ -2086,6 +2087,12 @@ export default function BookedRingsideEmpire() {
   const [running, setRunning] = useState(false);
   const [runShowError, setRunShowError] = useState(null);
   const [weekCount, setWeekCount] = useState(1);
+  // Event template ids whose show has already run THIS calendar week — reset
+  // to [] once every due template for the week is accounted for and the week
+  // actually advances. Lets several differently-scheduled shows (a weekly Raw
+  // and SmackDown, a monthly PPV) all fall in the same calendar week without
+  // the week ticking over after just the first one.
+  const [showsDoneThisWeek, setShowsDoneThisWeek] = useState([]);
   const [totalShowsRun, setTotalShowsRun] = useState(0);
   const [totalMatchesRun, setTotalMatchesRun] = useState(0);
 
@@ -2130,14 +2137,25 @@ export default function BookedRingsideEmpire() {
     setNetworkDeal((d) => (d && d.eventTemplateId === id ? { ...d, eventTemplateId: null } : d));
   };
   const setNetworkDealEvent = (eventTemplateId) => setNetworkDeal((d) => (d ? { ...d, eventTemplateId: eventTemplateId || null } : d));
-  // The template (if any) due this exact week — drives the Book screen's
-  // auto-preset and which TV deal (if attached to one) pays out.
-  // <= rather than === — a template whose turn got skipped (two templates due
-  // the same week; only one show runs per week) stays eligible instead of
-  // getting permanently stuck comparing against a weekNumber that's already
-  // moved past it. Sorted most-overdue-first so two colliding weekly shows
-  // take turns over time instead of the same one always winning the tie.
-  const activeEventTemplate = [...eventTemplates].sort((a, b) => a.nextWeekNumber - b.nextWeekNumber).find((t) => t.nextWeekNumber <= weekNumber) || null;
+  // The next template (if any) still due and not yet run THIS calendar week —
+  // drives the Book screen's auto-preset and which TV deal (if attached to
+  // one) pays out. Several shows can be due the same week (a weekly Raw and
+  // SmackDown, a monthly PPV): they're worked through in day-of-week order,
+  // one at a time, and the week itself only advances once none are left (see
+  // showsDoneThisWeek and isLastShowOfWeek, used in runShow).
+  // <= rather than === — a template that's fallen behind (the week moved
+  // past it some other way) stays eligible instead of getting permanently
+  // stuck comparing against a weekNumber it'll never match again.
+  const activeEventTemplate = [...eventTemplates]
+    .filter((t) => t.nextWeekNumber <= weekNumber && !showsDoneThisWeek.includes(t.id))
+    .sort((a, b) => DAYS_OF_WEEK.indexOf(a.dayOfWeek) - DAYS_OF_WEEK.indexOf(b.dayOfWeek) || a.nextWeekNumber - b.nextWeekNumber)[0] || null;
+  // Anything ELSE also due this week, still unrun — if this is non-empty, the
+  // show about to run isn't the last one of the week, so the weekly-cadence
+  // costs/ticks (payroll, aging, the rival-world simulation, …) hold off
+  // until whichever show actually is.
+  const otherDueTemplatesThisWeek = activeEventTemplate
+    ? eventTemplates.filter((t) => t.id !== activeEventTemplate.id && !showsDoneThisWeek.includes(t.id) && t.nextWeekNumber <= weekNumber)
+    : [];
 
   const roster = pool.filter((w) => w.contractedTo === "player");
   const avgRosterOverall = roster.length > 0 ? Math.round(roster.reduce((s, w) => s + attrOf(w), 0) / roster.length) : 0;
@@ -3029,6 +3047,12 @@ export default function BookedRingsideEmpire() {
     setTimeout(() => {
       try {
       const showRan = !skipShow;
+      // True once nothing else is left due this calendar week — only then do
+      // the weekly-cadence costs and ticks (payroll, staff/production upkeep,
+      // loan payment, aging, the rival-world simulation, bidding wars, …) fire
+      // and the week itself actually advances. A skip always counts as the
+      // last show of the week, same as it always has.
+      const isLastShowOfWeek = skipShow || otherDueTemplatesThisWeek.length === 0;
       // Every segment already resolved incrementally as it was booked (see
       // resolveSegmentResult) — Start Show just collects what's already
       // decided, then recomputes which matches count toward the repeat-
@@ -3049,8 +3073,10 @@ export default function BookedRingsideEmpire() {
       const revenue = attendance * ticketPrice;
       // Exclusive roster is billed a standing weekly wage regardless of whether they're
       // on this week's card. Per-use freelancers only cost their fee when actually booked —
-      // a dark-match-only freelancer still needs paying to show up and work.
-      const payroll = roster.reduce((sum, w) => sum + weeklyWage(w), 0);
+      // a dark-match-only freelancer still needs paying to show up and work. On a week
+      // with more than one show, that wage is charged once (on the last show of the
+      // week), not once per show.
+      const payroll = isLastShowOfWeek ? roster.reduce((sum, w) => sum + weeklyWage(w), 0) : 0;
       const freelancersUsed = new Set([
         ...matches.flatMap((m) => (m.format === "segment" ? [m.performer, ...(m.subject ? [m.subject] : [])] : [...m.team1, ...m.team2])).filter((w) => w.contractedTo === null).map((w) => w.name),
         ...darkMatchResults.flatMap((d) => [d.a, d.b]).filter((w) => w.contractedTo === null).map((w) => w.name),
@@ -3071,17 +3097,18 @@ export default function BookedRingsideEmpire() {
       // TV network pays per estimated viewer; sponsor pays a flat weekly fee. Both
       // lapse automatically once their deal's week count runs out.
       // A deal attached to a specific event template only pays out the week
-      // that exact show airs — an unattached (general) deal still pays every
-      // week it's active, same as before event templates existed.
+      // that exact show airs — an unattached (general) deal pays once per
+      // calendar week (on the week's last show) instead, same weekly framing
+      // as the sponsor fee below.
       const networkActive = networkDeal && weekNumber < networkDeal.expiresWeek
-        && (!networkDeal.eventTemplateId || (showRan && activeEventTemplate?.id === networkDeal.eventTemplateId));
+        && (networkDeal.eventTemplateId ? (showRan && activeEventTemplate?.id === networkDeal.eventTemplateId) : isLastShowOfWeek);
       const networkViewers = networkActive ? Math.round(popularity * networkDeal.viewerMult) : 0;
       const networkIncome = networkActive ? Math.round(networkViewers * networkDeal.payPerViewer * PRODUCTION_TIERS[productionTier].tvMult) : 0;
       const sponsorActive = sponsorDeal && weekNumber < sponsorDeal.expiresWeek;
-      const sponsorIncome = sponsorActive ? sponsorDeal.weeklyPay : 0;
+      const sponsorIncome = (isLastShowOfWeek && sponsorActive) ? sponsorDeal.weeklyPay : 0;
 
-      const loanPayment = loan ? loan.weeklyPayment : 0;
-      let profit = revenue - (showRan ? arena.cost + travelSurcharge + activeAdCampaign.cost : 0) - wrestlerPay - specialtyCost - loanPayment - staffWeeklyPayroll - productionWeeklyUpkeep + news.amount + networkIncome + sponsorIncome;
+      const loanPayment = isLastShowOfWeek ? (loan ? loan.weeklyPayment : 0) : 0;
+      let profit = revenue - (showRan ? arena.cost + travelSurcharge + activeAdCampaign.cost : 0) - wrestlerPay - specialtyCost - loanPayment - (isLastShowOfWeek ? staffWeeklyPayroll : 0) - (isLastShowOfWeek ? productionWeeklyUpkeep : 0) + news.amount + networkIncome + sponsorIncome;
       const matchLikeRatings = matches.map((m) => m.rating);
       let fullRating = matchLikeRatings.length ? Math.round(matchLikeRatings.reduce((s, r) => s + r, 0) / matchLikeRatings.length) : 0;
 
@@ -3128,9 +3155,11 @@ export default function BookedRingsideEmpire() {
         catastropheEntry = { text: `${reason} — a loss of £${hit.toLocaleString()} (${Math.round(severity * 100)}% of company funds).`, hit };
         setHasSurvivedCatastrophe(true);
       }
-      // A separate roll, only possible on a week a show actually ran (no
-      // crowd, no security incident) — capped at one disaster per week so
-      // bad luck doesn't compound into two DISASTER! banners at once.
+      // A separate roll, only possible on a show that actually ran (no
+      // crowd, no security incident) — capped at one disaster per SHOW so
+      // bad luck doesn't compound into two DISASTER! banners at once; a
+      // week with more than one show can still roll one at each, same as
+      // running two real shows in a week realistically carries twice the risk.
       if (!catastropheEntry && showRan && Math.random() < SECURITY_INCIDENT_CHANCE * securityIncidentFactor && bank > 0) {
         const severity = CATASTROPHE_SEVERITIES[rand(0, CATASTROPHE_SEVERITIES.length - 1)];
         const hit = Math.round(bank * severity);
@@ -3142,7 +3171,9 @@ export default function BookedRingsideEmpire() {
 
       setBank((b) => b + profit);
       const newBank = bank + profit;
-      if (loan) {
+      // Both of these count down/assess in calendar weeks, not shows — hold
+      // off until whichever show is actually this week's last.
+      if (isLastShowOfWeek && loan) {
         const remaining = loan.weeksRemaining - 1;
         if (remaining <= 0) {
           setLoan(null);
@@ -3152,14 +3183,16 @@ export default function BookedRingsideEmpire() {
           setLoan((l) => (l ? { ...l, weeksRemaining: remaining } : null));
         }
       }
-      if (newBank < 0) {
-        setBankruptWeeks((n) => {
-          const next = n + 1;
-          if (next >= FIRED_THRESHOLD) setGameOver(true);
-          return next;
-        });
-      } else {
-        setBankruptWeeks(0);
+      if (isLastShowOfWeek) {
+        if (newBank < 0) {
+          setBankruptWeeks((n) => {
+            const next = n + 1;
+            if (next >= FIRED_THRESHOLD) setGameOver(true);
+            return next;
+          });
+        } else {
+          setBankruptWeeks(0);
+        }
       }
       setPeakPopularity((p) => Math.max(p, popularity));
       // Growth gets harder the more established a city already is — running shows
@@ -3414,6 +3447,17 @@ export default function BookedRingsideEmpire() {
         setStables((ss) => ss.map((s) => (stableUpdates[s.id] ? { ...s, ...stableUpdates[s.id] } : s)));
       }
 
+      // Rival-world simulation, deals, and bidding wars all run on a weekly
+      // cadence, not a per-show one — holding off until isLastShowOfWeek
+      // keeps a two-show week from giving rivals two turns, rolling two
+      // bidding-war weeks, offering two fresh TV/sponsor deals, and so on.
+      // rivalShowUsage/rivalMatchOutcomes/rivalFreelanceBookings are read
+      // again much further down (the per-wrestler pool pass), so they're
+      // declared out here rather than scoped to the block below.
+      let rivalShowUsage = new Set();
+      let rivalMatchOutcomes = {};
+      let rivalFreelanceBookings = {}; // wrestler name -> company id that booked them this week
+      if (isLastShowOfWeek) {
       const rivalNewsEntries = [];
       const rivalPoolUpdates = {};
       const rivalTitleUpdates = {};
@@ -3676,9 +3720,9 @@ export default function BookedRingsideEmpire() {
       // ranking points. Freelancers aren't exclusive to anyone, so the same free
       // agent could realistically get booked by more than one promotion in a week
       // (just not the same one twice — that's tracked below).
-      const rivalShowUsage = new Set();
-      const rivalMatchOutcomes = {};
-      const rivalFreelanceBookings = {}; // wrestler name -> company id that booked them this week
+      rivalShowUsage = new Set();
+      rivalMatchOutcomes = {};
+      rivalFreelanceBookings = {}; // wrestler name -> company id that booked them this week
       const takenFreelancers = new Set(freelancersUsed);
       const newRivalShowRecords = [];
       rivalCompanies.forEach((co) => {
@@ -3737,18 +3781,19 @@ export default function BookedRingsideEmpire() {
           setHallOfFame((h) => (biggestRivalShow.attendance > (h.biggestShowRival?.attendance ?? -1) ? { ...h, biggestShowRival: { attendance: biggestRivalShow.attendance, companyName: biggestRivalShow.companyName, date: biggestRivalShow.date.toISOString() } } : h));
         }
       }
+      } // isLastShowOfWeek (rival-world simulation, deals, bidding wars)
 
       let poolWithGrowth = null;
       // Fresh free agents trickle in every 25 weeks, indefinitely — reserveNameAt
       // never runs out (see its own comment), so a decades-long save never stops
       // seeing new talent the way the old fixed-length name list used to.
-      if (weekNumber % 25 === 0) {
+      if (isLastShowOfWeek && weekNumber % 25 === 0) {
         const n1 = reserveNameAt(nextReserveIndex), n2 = reserveNameAt(nextReserveIndex + 1);
         poolWithGrowth = [makeWrestler(n1), makeWrestler(n2)];
         setNextReserveIndex((i) => i + 2);
         setUniverseFeed((feed) => [{ id: `g-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${n1} and ${n2} have entered the wrestling scene as free agents.`, type: "rumor" }, ...feed].slice(0, 300));
       }
-      if (weekNumber % 4 === 0 && nextStaggeredDebutIndex < STAGGERED_DEBUT_DATA.length) {
+      if (isLastShowOfWeek && weekNumber % 4 === 0 && nextStaggeredDebutIndex < STAGGERED_DEBUT_DATA.length) {
         const d = STAGGERED_DEBUT_DATA[nextStaggeredDebutIndex];
         const debutWrestler = makeWrestlerFromOverall(d.name, d.overall, { age: d.age, sex: d.gender, weightClass: d.weightClass, alignment: d.alignment });
         poolWithGrowth = [...(poolWithGrowth || []), debutWrestler];
@@ -3758,7 +3803,7 @@ export default function BookedRingsideEmpire() {
       // What the wrestling world wants shifts every FAN_TREND_ROTATION_WEEKS,
       // same cadence class as the trickles above — ticks regardless of
       // whether a show ran, since it's about the world, not your card.
-      if (weekNumber % FAN_TREND_ROTATION_WEEKS === 0) {
+      if (isLastShowOfWeek && weekNumber % FAN_TREND_ROTATION_WEEKS === 0) {
         const candidates = FAN_TRENDS.filter((t) => t.key !== fanTrendKey);
         const next = candidates[rand(0, candidates.length - 1)];
         setFanTrendKey(next.key);
@@ -3832,7 +3877,11 @@ export default function BookedRingsideEmpire() {
       });
       const brokenNames = new Set(); // filled below once we know which requests just broke
       // (re-derive from the pre-sweep list so we can dock happiness in the same pool pass)
-      requests.forEach((r) => { if (r.status === "promised" && weekNumber > r.deadlineWeek) brokenNames.add(r.wrestlerName); });
+      // Gated the same as everything else weekly — a broken promise's
+      // happiness hit should land once per calendar week, not once per show.
+      if (isLastShowOfWeek) {
+        requests.forEach((r) => { if (r.status === "promised" && weekNumber > r.deadlineWeek) brokenNames.add(r.wrestlerName); });
+      }
 
       // Auto-fulfilled request types: push (booked in Main Event), title-shot
       // (booked in a title match), match (booked against their named target).
@@ -3875,9 +3924,12 @@ export default function BookedRingsideEmpire() {
 
       // A few things happen across the wrestling world every week, regardless of
       // whether they touch your own card — drawn from the whole pool, not just
-      // this week's participants.
+      // this week's participants. Weekly cadence, same reasoning as the rival
+      // simulation above — rosterEventUpdates is read again in the pool pass
+      // below, so it's declared out here rather than scoped to the gate.
+      let rosterEventUpdates = {};
+      if (isLastShowOfWeek) {
       const rosterNewsEntries = [];
-      const rosterEventUpdates = {};
       const eventCount = rand(ROSTER_EVENTS_MIN, ROSTER_EVENTS_MAX);
       for (let i = 0; i < eventCount; i++) {
         const tmpl = UNIVERSE_EVENT_TEMPLATES[rand(0, UNIVERSE_EVENT_TEMPLATES.length - 1)];
@@ -3915,6 +3967,7 @@ export default function BookedRingsideEmpire() {
       if (rosterNewsEntries.length > 0) {
         setUniverseFeed((feed) => [...rosterNewsEntries.map((text, i) => ({ id: `r-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text, type: "rumor" })), ...feed].slice(0, 300));
       }
+      } // isLastShowOfWeek (universe events)
 
       const injuryNewsEntries = [];
       const newlyInjuredNames = []; // wrestler names injured this tick, any title they hold gets vacated below
@@ -4103,7 +4156,7 @@ export default function BookedRingsideEmpire() {
             }
           }
 
-          if (weekNumber % WEEKS_PER_YEAR === 0) {
+          if (isLastShowOfWeek && weekNumber % WEEKS_PER_YEAR === 0) {
             const newAge = aged.age + 1;
             aged = { ...aged, age: newAge };
             if (newAge >= 35) {
@@ -4244,15 +4297,18 @@ export default function BookedRingsideEmpire() {
           });
         }
       }
-      // Calendar reminders — fire regardless of whether a show ran this week.
-      // One-off events are removed once fired; recurring ones reschedule
-      // intervalWeeks further out instead of disappearing.
-      const dueEvents = scheduledEvents.filter((e) => e.weekNumber <= weekNumber);
-      if (dueEvents.length > 0) {
-        setUniverseFeed((feed) => [...dueEvents.map((e, i) => ({ id: `cal-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `REMINDER: ${e.label}`, type: "rumor", companyId: "player" })), ...feed].slice(0, 300));
-        setScheduledEvents((ev) => ev
-          .filter((e) => !dueEvents.some((d) => d.id === e.id) || e.recurring)
-          .map((e) => (dueEvents.some((d) => d.id === e.id) && e.recurring ? { ...e, weekNumber: e.weekNumber + e.intervalWeeks } : e)));
+      // Calendar reminders — fire regardless of whether a show ran this week,
+      // but only once per calendar week (not once per show on a multi-show
+      // one). One-off events are removed once fired; recurring ones
+      // reschedule intervalWeeks further out instead of disappearing.
+      if (isLastShowOfWeek) {
+        const dueEvents = scheduledEvents.filter((e) => e.weekNumber <= weekNumber);
+        if (dueEvents.length > 0) {
+          setUniverseFeed((feed) => [...dueEvents.map((e, i) => ({ id: `cal-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `REMINDER: ${e.label}`, type: "rumor", companyId: "player" })), ...feed].slice(0, 300));
+          setScheduledEvents((ev) => ev
+            .filter((e) => !dueEvents.some((d) => d.id === e.id) || e.recurring)
+            .map((e) => (dueEvents.some((d) => d.id === e.id) && e.recurring ? { ...e, weekNumber: e.weekNumber + e.intervalWeeks } : e)));
+        }
       }
       // Event templates reschedule themselves on their own cadence regardless
       // of whether this week's show actually ran — a weekly slot moves to next
@@ -4295,7 +4351,15 @@ export default function BookedRingsideEmpire() {
           return replaced;
         });
       }
-      setWeekCount((w) => w + 1);
+      // The calendar week only actually turns over once nothing else is due
+      // this week — otherwise just mark this template's own slot done so the
+      // Book screen moves on to whichever show is next (see activeEventTemplate).
+      if (isLastShowOfWeek) {
+        setWeekCount((w) => w + 1);
+        setShowsDoneThisWeek([]);
+      } else if (showRan && activeEventTemplate) {
+        setShowsDoneThisWeek((d) => [...d, activeEventTemplate.id]);
+      }
       setShowResult(record);
       } catch (e) {
         // A show that throws partway through should never leave the button
@@ -4356,7 +4420,7 @@ export default function BookedRingsideEmpire() {
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
     scheduledEvents, eventTemplates, workingAgreements, feederCompany,
-    staffPool, productionTier, fanTrendKey, shortlist, pendingOffers,
+    staffPool, productionTier, fanTrendKey, shortlist, pendingOffers, showsDoneThisWeek,
   });
 
   const applySaveSnapshot = (s) => {
@@ -4405,6 +4469,7 @@ export default function BookedRingsideEmpire() {
     setStaffPool(s.staffPool || buildStaffPool());
     setShortlist(s.shortlist || []);
     setPendingOffers(s.pendingOffers || []);
+    setShowsDoneThisWeek(s.showsDoneThisWeek || []);
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setDarkMatches([]);
@@ -4578,8 +4643,8 @@ export default function BookedRingsideEmpire() {
   // level and venue — the player still builds and runs the card themselves,
   // this just saves re-picking the same weekly/monthly/PPV setup every time.
   useEffect(() => {
-    const due = [...eventTemplates].sort((a, b) => a.nextWeekNumber - b.nextWeekNumber).find((t) => t.nextWeekNumber <= weekCount);
-    if (due) {
+    if (activeEventTemplate) {
+      const due = activeEventTemplate;
       setShowLevel(due.level);
       setArenaIdx(due.arenaIdx);
       setTicketPrice(ARENAS[due.arenaIdx].ticketMin);
@@ -4588,7 +4653,7 @@ export default function BookedRingsideEmpire() {
       setCity(due.preferredCity || startingCity);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekCount]);
+  }, [weekCount, showsDoneThisWeek]);
 
   const checkAchievements = () => {
     const ctx = {
@@ -4658,6 +4723,9 @@ export default function BookedRingsideEmpire() {
     setProductionTier(0);
     setFanTrendKey(FAN_TRENDS[rand(0, FAN_TRENDS.length - 1)].key);
     setPendingLegacies([]);
+    setPendingOffers([]);
+    setShortlist([]);
+    setShowsDoneThisWeek([]);
     setStaffPool(buildStaffPool());
     setSegments([]);
     setDarkMatches([]);
@@ -5922,8 +5990,8 @@ export default function BookedRingsideEmpire() {
                   Add
                 </button>
               </div>
-              {eventTemplates.some((t) => t.intervalWeeks === newTemplateIntervalWeeks) && (
-                <div className="text-[9px] text-yellow-400 italic mb-2">Only one show actually runs per week — this will alternate turns with your other same-cadence show rather than both firing every time.</div>
+              {eventTemplates.some((t) => t.intervalWeeks === newTemplateIntervalWeeks && t.dayOfWeek === newTemplateDayOfWeek) && (
+                <div className="text-[9px] text-yellow-400 italic mb-2">Same day and cadence as another show already on your schedule — when both are due the same week, this one comes first; otherwise each runs as its own show, same week or not.</div>
               )}
               </>
               )}
@@ -7095,9 +7163,15 @@ export default function BookedRingsideEmpire() {
                     {projectedFreelanceCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Freelancer fees</span><span className="font-bold">£{projectedFreelanceCost.toLocaleString()}</span></div>}
                     {projectedAgreementCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Partner loan fees</span><span className="font-bold">£{projectedAgreementCost.toLocaleString()}</span></div>}
                     <div className="flex justify-between pt-1.5 border-t border-[#2B2733]"><span className="text-[#8B6BC0] font-bold">Show total</span><span className="font-bold text-[#8B6BC0]">£{projectedShowCost.toLocaleString()}</span></div>
-                    <div className="flex justify-between text-[#5A5660]"><span>Roster payroll (weekly)</span><span>£{projectedPayroll.toLocaleString()}</span></div>
-                    {staffWeeklyPayroll > 0 && <div className="flex justify-between text-[#5A5660]"><span>Staff payroll (weekly)</span><span>£{staffWeeklyPayroll.toLocaleString()}</span></div>}
-                    {productionWeeklyUpkeep > 0 && <div className="flex justify-between text-[#5A5660]"><span>Production upkeep (weekly)</span><span>£{productionWeeklyUpkeep.toLocaleString()}</span></div>}
+                    {otherDueTemplatesThisWeek.length === 0 ? (
+                      <>
+                        <div className="flex justify-between text-[#5A5660]"><span>Roster payroll (weekly)</span><span>£{projectedPayroll.toLocaleString()}</span></div>
+                        {staffWeeklyPayroll > 0 && <div className="flex justify-between text-[#5A5660]"><span>Staff payroll (weekly)</span><span>£{staffWeeklyPayroll.toLocaleString()}</span></div>}
+                        {productionWeeklyUpkeep > 0 && <div className="flex justify-between text-[#5A5660]"><span>Production upkeep (weekly)</span><span>£{productionWeeklyUpkeep.toLocaleString()}</span></div>}
+                      </>
+                    ) : (
+                      <div className="text-[9px] text-[#8B8593] italic pt-1">{otherDueTemplatesThisWeek.length} more show{otherDueTemplatesThisWeek.length === 1 ? "" : "s"} due this week — weekly payroll, upkeep, and loan payment are billed once, on the last one.</div>
+                    )}
                   </div>
                 </div>
 
