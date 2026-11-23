@@ -4,7 +4,7 @@ import {
   Wallet, Users, Ticket, Building2, Star, X, Plus, Trophy, UserPlus, Award, BarChart3, Newspaper,
   Calendar, ChevronDown, ListChecks, Landmark, Pencil, Globe2, Check, Sparkles, BatteryCharging,
   ArrowUpCircle, Swords, Layers, LineChart as LineChartIcon, NotebookPen, Lock, Tv, Flame, Skull, Users2, BookOpen, Menu, Flag,
-  Wrench, Upload, Download, Trash2, HardHat
+  Wrench, Upload, Download, Trash2, HardHat, Medal
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -1819,6 +1819,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Achievements (Menu > Achievements) are lifetime — 37 of them, covering company growth, roster building, finance, titles, merchandise, and more. They persist even if you retire and start a fresh promotion; only a full progress wipe clears them.",
       "Hall of Fame (Menu > Hall of Fame) tracks your best-ever match, biggest-ever show, and longest-ever title reign — and shows the best any rival has ever managed in each, side by side, so you can see if anyone's actually beaten you.",
+      "Awards (Menu > Awards) hands out Wrestler, Match, and Angle of the Year for whichever year you pick, worked out fresh from your Results history rather than tracked as a running record — so it only covers shows still listed there.",
     ],
   },
   {
@@ -1848,6 +1849,7 @@ const SIDEBAR_SECTIONS = [
       { key: "merch", label: "Merchandise", icon: Ticket },
       { key: "achievements", label: "Achievements", icon: Trophy },
       { key: "halloffame", label: "Hall of Fame", icon: Star },
+      { key: "awards", label: "Awards", icon: Medal },
       { key: "backoffice", label: "Back Office", icon: Landmark },
       { key: "saves", label: "Saves", icon: NotebookPen },
     ],
@@ -1965,6 +1967,7 @@ export default function BookedRingsideEmpire() {
   const [companyImportSummary, setCompanyImportSummary] = useState(null);
   const [bookSubTab, setBookSubTab] = useState("book");
   const [resultsYearFilter, setResultsYearFilter] = useState("all");
+  const [awardsYear, setAwardsYear] = useState(null);
   const [resultsCompanyFilter, setResultsCompanyFilter] = useState("player");
   const [detailWrestler, setDetailWrestler] = useState(null);
   const [expandedResults, setExpandedResults] = useState(() => new Set());
@@ -8208,6 +8211,70 @@ export default function BookedRingsideEmpire() {
           </div>
         )}
 
+        {tab === "awards" && (() => {
+          const awardsYearsAvailable = [...new Set(showHistory.map((r) => r.year))].sort((a, b) => b - a);
+          const effectiveAwardsYear = awardsYear ?? (awardsYearsAvailable[0] ?? currentYear);
+          const yearShows = showHistory.filter((r) => r.year === effectiveAwardsYear);
+          const allMatches = yearShows.flatMap((r) => r.matches.filter((m) => m.format === "match").map((m) => ({ ...m, showDate: r.date, showCity: r.city })));
+          const allAngles = yearShows.flatMap((r) => r.matches.filter((m) => m.format === "segment").map((m) => ({ ...m, showDate: r.date, showCity: r.city })));
+          const matchOfYear = allMatches.length > 0 ? allMatches.reduce((best, m) => (m.rating > best.rating ? m : best)) : null;
+          const angleOfYear = allAngles.length > 0 ? allAngles.reduce((best, m) => (m.rating > best.rating ? m : best)) : null;
+          // A simple, transparent score — not a hidden formula: every match or
+          // angle you were part of adds its rating, winning a match adds a flat
+          // bonus, and winning or capturing gold on top of that adds more. Highest
+          // total for the year takes it, same way a real end-of-year poll would
+          // weigh "worked a lot of good matches" against "actually won things."
+          const wrestlerScores = {};
+          const bump = (name, amt) => { wrestlerScores[name] = (wrestlerScores[name] || 0) + amt; };
+          allMatches.forEach((m) => {
+            [...(m.team1 || []), ...(m.team2 || [])].forEach((w) => bump(w.name, m.rating));
+            (m.winnerTeam || []).forEach((w) => {
+              bump(w.name, 15);
+              if (m.titleInfo && !m.titleInfo.defended) bump(w.name, 25);
+            });
+          });
+          allAngles.forEach((m) => { if (m.performer) bump(m.performer.name, Math.round(m.rating * 0.5)); });
+          const wrestlerOfYearEntry = Object.entries(wrestlerScores).sort((a, b) => b[1] - a[1])[0] || null;
+          return (
+            <div>
+              <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+                <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">AWARDS</div>
+                <select value={effectiveAwardsYear} onChange={(e) => setAwardsYear(Number(e.target.value))} className="bg-[#17151C] border border-[#2B2733] rounded px-2 py-1 text-[10px]">
+                  {awardsYearsAvailable.length === 0 && <option value={currentYear}>Year {currentYear}</option>}
+                  {awardsYearsAvailable.map((y) => <option key={y} value={y}>Year {y}</option>)}
+                </select>
+              </div>
+              <div className="text-[10px] text-[#8B8593] mb-4">End-of-year honors for {companyName}, based on every show run that year. Only covers shows still in your Results history.</div>
+              <div className="space-y-3 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-3 dt:items-start">
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2"><Medal size={16} className="text-[#8B6BC0]" /><span className="font-bold text-sm">Wrestler of the Year</span></div>
+                  {wrestlerOfYearEntry ? (
+                    <div className="text-xs"><span className="text-[#F2ECDD] font-bold">{wrestlerOfYearEntry[0]}</span><span className="text-[#8B8593]"> — score {Math.round(wrestlerOfYearEntry[1])}</span></div>
+                  ) : <div className="text-xs text-[#8B8593] italic">No shows run this year yet.</div>}
+                </div>
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2"><Star size={16} className="text-[#8B6BC0]" /><span className="font-bold text-sm">Match of the Year</span></div>
+                  {matchOfYear ? (
+                    <div className="text-xs">
+                      <div className="text-[#F2ECDD] font-bold">{[...matchOfYear.team1, ...(matchOfYear.team2 || [])].map((w) => w.name).join(matchOfYear.team2?.length ? " vs " : ", ")}</div>
+                      <div className="text-[#8B8593] mt-0.5">{matchOfYear.rating} rating &middot; {formatDate(matchOfYear.showDate)} &middot; {matchOfYear.showCity}</div>
+                    </div>
+                  ) : <div className="text-xs text-[#8B8593] italic">No matches this year yet.</div>}
+                </div>
+                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 dt:col-span-2">
+                  <div className="flex items-center gap-2 mb-2"><Mic2 size={16} className="text-[#8B6BC0]" /><span className="font-bold text-sm">Angle of the Year</span></div>
+                  {angleOfYear ? (
+                    <div className="text-xs">
+                      <div className="text-[#F2ECDD] font-bold">{angleResultText(angleOfYear)}</div>
+                      <div className="text-[#8B8593] mt-0.5">{angleOfYear.rating} rating &middot; {formatDate(angleOfYear.showDate)} &middot; {angleOfYear.showCity}</div>
+                    </div>
+                  ) : <div className="text-xs text-[#8B8593] italic">No angles this year yet.</div>}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {tab === "achievements" && (
           <div>
             <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">ACHIEVEMENTS</div>
@@ -8295,6 +8362,7 @@ export default function BookedRingsideEmpire() {
                 { key: "news", label: "News", desc: "Everything happening", icon: Newspaper },
                 { key: "achievements", label: "Achievements", desc: `${unlockedAchievements.length}/${ACHIEVEMENTS.length} unlocked`, icon: Trophy },
                 { key: "halloffame", label: "Hall of Fame", desc: "Your best, all-time", icon: Star },
+                { key: "awards", label: "Awards", desc: "Year-end Wrestler/Match/Angle of the Year", icon: Medal },
                 { key: "backoffice", label: "Back Office", desc: "Company & promoter names", icon: Landmark },
                 { key: "guide", label: "Guide", desc: "How to play", icon: BookOpen },
                 { key: "saves", label: "Saves", desc: "Save, retire, or start over", icon: NotebookPen },
