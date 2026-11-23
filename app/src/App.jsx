@@ -228,6 +228,35 @@ const ANGLE_TYPES = [
   { key: "confrontation", label: "Confrontation", desc: "Two people face to face — rated on both performers' charisma, and carries a real chance of boiling over into a physical swerve. A bigger rivalry swing than a plain promo." },
   { key: "vignette", label: "Vignette", desc: "Solo atmosphere-building — rated on entertainment instead of charisma, no subject. A way for a strong-presentation, weak-mic performer to still pull weight on an angle." },
 ];
+
+// Fan trends — what the wrestling world wants right now rotates every
+// FAN_TREND_ROTATION_WEEKS weeks, giving a flat rating bonus to anything
+// booked that actually fits it. Not a stat-math optimization: three of the
+// six key off weight class (an existing field, nothing new to track), one
+// keys off booking a Speciality Match, one off any Angle, one off tag/multi-
+// man formats. The point is to make "what style is hot" a real, visible
+// booking decision instead of the rating formula always rewarding the same
+// optimal card shape.
+const FAN_TREND_ROTATION_WEEKS = 12;
+const FAN_TREND_BONUS = 8;
+const FAN_TRENDS = [
+  { key: "hardcore", label: "Hardcore Wrestling", desc: "Fans want blood and chaos — any Speciality Match hits harder right now.", news: "eating up hardcore, no-holds-barred violence" },
+  { key: "highflying", label: "High-Flying Action", desc: "Fans want speed and aerial offense — an all-Cruiserweight match hits harder right now.", news: "popping hardest for high-flying Cruiserweight action" },
+  { key: "powerhouse", label: "Powerhouse Style", desc: "Fans want size and strength — an all-Heavyweight match hits harder right now.", news: "into raw Heavyweight power right now" },
+  { key: "technical", label: "Technical Wrestling", desc: "Fans want mat-based psychology — an all-Light Heavyweight match hits harder right now.", news: "appreciating smart, technical Light Heavyweight wrestling" },
+  { key: "storytelling", label: "Sports Entertainment", desc: "Fans want storylines — any Angle (Promo, Confrontation, or Vignette) hits harder right now.", news: "hooked on storyline-driven angles over straight wrestling" },
+  { key: "tagteam", label: "Tag Team Wrestling", desc: "Fans want chemistry and teamwork — tag, Triple Threat, and Fatal 4-Way matches hit harder right now.", news: "buzzing for tag team and multi-man chaos" },
+];
+const FAN_TREND_WEIGHT_CLASS = { highflying: "Cruiserweight", powerhouse: "Heavyweight", technical: "Light Heavyweight" };
+function fitsFanTrend(trendKey, seg) {
+  if (trendKey === "hardcore") return seg.format === "match" && !!seg.specialtyId;
+  if (trendKey === "storytelling") return seg.format === "segment";
+  if (trendKey === "tagteam") return seg.format === "match" && seg.type !== "singles";
+  const wantedClass = FAN_TREND_WEIGHT_CLASS[trendKey];
+  if (!wantedClass || seg.format !== "match") return false;
+  const participants = [...seg.team1, ...seg.team2].filter(Boolean);
+  return participants.length > 0 && participants.every((w) => w.weightClass === wantedClass);
+}
 function isSegmentComplete(seg) {
   if (seg.format === "segment") {
     if (seg.angleType === "confrontation") return !!seg.team1[0] && !!seg.team2?.[0];
@@ -1581,6 +1610,7 @@ const GUIDE_SECTIONS = [
       "A Face vs Heel matchup gets a small rating bump for the contrast — booking two of the same alignment against each other is a flatter match.",
       "Pre-show and post-show dark matches (up to 3 each, also on the Book page) sit entirely outside the card — no time budget, no effect on the show rating, no wins/losses on anyone's record. They're just reps: a small chance of a permanent stat bump, and ring time that counts toward Developmental training for anyone not otherwise on the card.",
       "Advertising (Book page, picked fresh for each scheduled show) spends money up front for a real boost to that show's attendance and how much it grows the city's popularity — Posters & Flyers, a TV Spot, or a Social Media Blitz, each pricier and stronger than the last.",
+      "What the wrestling world wants shifts every few months — shown on the Book page and your Company tab. Anything that actually fits the current trend (a Speciality Match during a Hardcore phase, an all-Cruiserweight match during High-Flying, an Angle during Sports Entertainment, and so on) gets a flat rating bonus, so the same card shape isn't always the optimal one to book.",
     ],
   },
   {
@@ -1762,6 +1792,8 @@ export default function BookedRingsideEmpire() {
   const [rivalTitles, setRivalTitles] = useState(() => RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: _initialChampions[c.id] || null, reignStartWeek: _initialChampions[c.id] ? 1 : null })));
   const [nextReserveIndex, setNextReserveIndex] = useState(BULK_DEBUT_COUNT);
   const [nextStaggeredDebutIndex, setNextStaggeredDebutIndex] = useState(0);
+  const [fanTrendKey, setFanTrendKey] = useState(() => FAN_TRENDS[rand(0, FAN_TRENDS.length - 1)].key);
+  const fanTrend = FAN_TRENDS.find((t) => t.key === fanTrendKey) || FAN_TRENDS[0];
 
   const [tab, setTab] = useState("guide");
   const [companySubTab, setCompanySubTab] = useState("overview");
@@ -2508,6 +2540,9 @@ export default function BookedRingsideEmpire() {
   const resolveSegmentResult = (seg, index, total) => {
     const cap = computeSegmentCap(index, total, seg.minutes);
     const label = segmentLabel(index, total);
+    // What the wrestling world wants right now, applied flat wherever this
+    // particular segment actually fits the active trend.
+    const trendBonus = fitsFanTrend(fanTrendKey, seg) ? FAN_TREND_BONUS : 0;
     if (seg.format === "segment") {
       const angleType = seg.angleType || "promo";
       const performer = seg.team1[0];
@@ -2522,7 +2557,7 @@ export default function BookedRingsideEmpire() {
       // genuinely going off-script, at a small energy cost (see the weekly
       // tick) instead of a promo's usual energy recovery.
       const brawl = angleType === "confrontation" && !!subject && Math.random() < 0.25;
-      const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus) + (brawl ? 6 : 0));
+      const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus + trendBonus) + (brawl ? 6 : 0));
       return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, titleInfo: null };
     }
     if (seg.type === "triple" || seg.type === "fatal4") {
@@ -2543,7 +2578,7 @@ export default function BookedRingsideEmpire() {
       let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread) + 3)); // scrambles run a touch hotter
       const specialty = seg.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === seg.specialtyId) : null;
       if (specialty) rating = Math.min(cap, rating + specialty.ratingBonus);
-      rating = Math.min(cap, rating + showQualityBonus);
+      rating = Math.min(cap, rating + showQualityBonus + trendBonus);
       let titleInfo = null;
       if (seg.titleId) {
         const title = titles.find((t) => t.id === seg.titleId);
@@ -2631,7 +2666,7 @@ export default function BookedRingsideEmpire() {
         titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
       }
     }
-    rating = Math.min(cap, rating + showQualityBonus);
+    rating = Math.min(cap, rating + showQualityBonus + trendBonus);
     return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod: pickWinMethod(winnerTeam) };
   };
 
@@ -3396,6 +3431,15 @@ export default function BookedRingsideEmpire() {
         setNextStaggeredDebutIndex((i) => i + 1);
         setUniverseFeed((feed) => [{ id: `debut-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${d.name} has made their debut, entering the wrestling scene as a free agent.`, type: "rumor" }, ...feed].slice(0, 300));
       }
+      // What the wrestling world wants shifts every FAN_TREND_ROTATION_WEEKS,
+      // same cadence class as the trickles above — ticks regardless of
+      // whether a show ran, since it's about the world, not your card.
+      if (weekNumber % FAN_TREND_ROTATION_WEEKS === 0) {
+        const candidates = FAN_TRENDS.filter((t) => t.key !== fanTrendKey);
+        const next = candidates[rand(0, candidates.length - 1)];
+        setFanTrendKey(next.key);
+        setUniverseFeed((feed) => [{ id: `trend-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `The wrestling world is ${next.news} right now.`, type: "rumor" }, ...feed].slice(0, 300));
+      }
 
       // Segment performers get a small permanent bump to whichever stat the
       // angle actually exercised — charisma for a Promo/Confrontation,
@@ -3932,7 +3976,7 @@ export default function BookedRingsideEmpire() {
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
     scheduledEvents, eventTemplates, workingAgreements, feederCompany,
-    staffPool, productionTier,
+    staffPool, productionTier, fanTrendKey,
   });
 
   const applySaveSnapshot = (s) => {
@@ -3976,6 +4020,7 @@ export default function BookedRingsideEmpire() {
     setWorkingAgreements(s.workingAgreements || []);
     setFeederCompany(s.feederCompany || null);
     setProductionTier(s.productionTier ?? 0);
+    setFanTrendKey(s.fanTrendKey || FAN_TRENDS[0].key);
     setStaffPool(s.staffPool || buildStaffPool());
     setArenaIdx(1); setCity(null);
     setSegments([]);
@@ -4226,6 +4271,7 @@ export default function BookedRingsideEmpire() {
     setWorkingAgreements([]);
     setFeederCompany(null);
     setProductionTier(0);
+    setFanTrendKey(FAN_TRENDS[rand(0, FAN_TRENDS.length - 1)].key);
     setStaffPool(buildStaffPool());
     setSegments([]);
     setDarkMatches([]);
@@ -4786,9 +4832,13 @@ export default function BookedRingsideEmpire() {
                       <div className="text-[9px] text-[#8B8593] tracking-wide mb-0.5">TOTAL MATCHES RUN</div>
                       <div className="font-black text-lg">{totalMatchesRun}</div>
                     </div>
-                    <div className="bg-[#131117] rounded-lg p-3 col-span-2">
+                    <div className="bg-[#131117] rounded-lg p-3">
                       <div className="text-[9px] text-[#8B8593] tracking-wide mb-0.5">TITLES IN COMPANY</div>
                       <div className="font-black text-lg">{titles.length}</div>
+                    </div>
+                    <div className="bg-[#131117] rounded-lg p-3" title={fanTrend.desc}>
+                      <div className="text-[9px] text-[#8B8593] tracking-wide mb-0.5">FANS WANT</div>
+                      <div className="font-black text-sm">{fanTrend.label}</div>
                     </div>
                   </div>
                 </div>
@@ -6116,6 +6166,12 @@ export default function BookedRingsideEmpire() {
               )}
               <div className="text-[10px] text-[#8B8593] mt-2">
                 Capacity {arena.crowdMin.toLocaleString()}&ndash;{arena.crowdMax.toLocaleString()} &middot; Booking cost £{arena.cost.toLocaleString()}{travelSurcharge > 0 ? ` + £${travelSurcharge.toLocaleString()} travel` : ""}
+              </div>
+              <div className="flex items-center gap-1.5 bg-[#131117] rounded-lg px-2.5 py-2 mt-3 text-[10px]" title={fanTrend.desc}>
+                <Flame size={12} className="text-[#8B6BC0] shrink-0" />
+                <span className="text-[#8B8593]">Fans want</span>
+                <span className="font-bold text-[#F2ECDD]">{fanTrend.label}</span>
+                <span className="text-[#8B6BC0] font-bold ml-auto">+{FAN_TREND_BONUS} rtg if it fits</span>
               </div>
               <div className="mt-3">
                 <div className="flex justify-between text-[10px] text-[#8B8593] mb-1"><span>TICKET PRICE</span><span className="text-[#F2ECDD] font-bold">£{ticketPrice}</span></div>
