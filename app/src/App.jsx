@@ -1338,14 +1338,20 @@ const AD_CAMPAIGNS = [
 // rating ceiling. Each type is driven by whichever stat fits it best, blended into
 // the win probability alongside overall ATTR — so a specialist can upset a bigger
 // name in the right kind of match, and different stipulations reward different builds.
+// Gating loosened from the original mobile-sized curve: a No DQ or Hardcore
+// brawl needs nothing but a lenient referee, and plenty of real indie
+// promotions run tables/ladder/submission stipulations on a shoestring
+// budget — none of that calls for arena-level production. Only the
+// genuinely structural gimmicks (a literal cage or chamber has to be built
+// and trucked in) stay reserved for the biggest shows.
 const SPECIALTY_MATCHES = [
-  { id: "nodq", name: "No DQ", minTier: "Local", cost: 100, ratingBonus: 3, statKey: "atk" },
-  { id: "hardcore", name: "Hardcore Match", minTier: "Local", cost: 150, ratingBonus: 4, statKey: "atk" },
-  { id: "tables", name: "Tables Match", minTier: "Regional", cost: 250, ratingBonus: 5, statKey: "spec" },
+  { id: "nodq", name: "No DQ", minTier: "Unknown", cost: 100, ratingBonus: 3, statKey: "atk" },
+  { id: "hardcore", name: "Hardcore Match", minTier: "Unknown", cost: 150, ratingBonus: 4, statKey: "atk" },
+  { id: "tables", name: "Tables Match", minTier: "Local", cost: 250, ratingBonus: 5, statKey: "spec" },
+  { id: "submission", name: "Submission Match", minTier: "Local", cost: 350, ratingBonus: 6, statKey: "sub" },
   { id: "fca", name: "Falls Count Anywhere", minTier: "Regional", cost: 300, ratingBonus: 5, statKey: "spec" },
-  { id: "submission", name: "Submission Match", minTier: "Regional", cost: 350, ratingBonus: 6, statKey: "sub" },
+  { id: "ladder", name: "Ladder Match", minTier: "Regional", cost: 750, ratingBonus: 8, statKey: "jmp" },
   { id: "lastmanstanding", name: "Last Man Standing", minTier: "National", cost: 600, ratingBonus: 7, statKey: "eng" },
-  { id: "ladder", name: "Ladder Match", minTier: "National", cost: 750, ratingBonus: 8, statKey: "jmp" },
   { id: "ironman", name: "Iron Man Match", minTier: "National", cost: 900, ratingBonus: 9, statKey: "eng" },
   { id: "cage", name: "Cage Match", minTier: "Global", cost: 1500, ratingBonus: 12, statKey: "atk" },
   { id: "chamber", name: "Elimination Chamber", minTier: "Global", cost: 2500, ratingBonus: 15, statKey: "spec" },
