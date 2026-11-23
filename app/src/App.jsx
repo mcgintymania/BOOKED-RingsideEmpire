@@ -287,6 +287,7 @@ function makeSegment(format) {
     // shapes. winMethodOverride is one of pickWinMethod's own return strings.
     winnerOverride: null, winMethodOverride: null,
     purposeId: "competitive",
+    storyId: "standard",
     result: null,
   };
 }
@@ -1349,6 +1350,21 @@ const MATCH_PURPOSES = [
   { id: "squash", label: "Squash", desc: "A dominant, one-sided win to get someone over fast — short, never a classic, but a big credibility injection if the loser is any kind of name.", capBonus: -18, energyMult: 0.5 },
 ];
 const MATCH_PURPOSE_BY_ID = Object.fromEntries(MATCH_PURPOSES.map((p) => [p.id, p]));
+// The narrative hook, independent of Purpose above — Purpose is why you're
+// booking it (a fair fight, an endorsement, a squash), Match Story is what
+// kind of match it reads as to the crowd. Matches Pro Wrestling Sim's split
+// between the two (its Match Story field shows things like "Comedy Match").
+// capBonus/floorBoostFrac work exactly like MATCH_PURPOSES' — "classic" and
+// "underdog" compute their own bonus at the point they're applied instead,
+// since both depend on how the two sides actually compare once a winner's
+// picked, not a flat number.
+const MATCH_STORIES = [
+  { id: "standard", label: "Standard", desc: "No particular narrative hook — whatever the stats and Purpose produce." },
+  { id: "comedy", label: "Comedy Match", desc: "Played for laughs — safer and more consistent with the crowd, but it's never going down as a classic.", capBonus: -8, floorBoostFrac: 0.35 },
+  { id: "classic", label: "Back-and-Forth Classic", desc: "Both sides trade momentum all the way — a real shot at the night's best rating when they're closely matched on paper, flat if they're not." },
+  { id: "underdog", label: "Underdog Story", desc: "Framed around the lesser-rated side fighting from behind — an actual upset pays off in both rating and the winner's draw power." },
+];
+const MATCH_STORY_BY_ID = Object.fromEntries(MATCH_STORIES.map((s) => [s.id, s]));
 const SPECIALTY_WEIGHT = 0.5; // how much of the win probability the driving stat controls, vs overall ATTR
 function specialtyUnlocked(type, popularity) {
   return TIER_RANK[popularityTier(popularity)] >= TIER_RANK[type.minTier];
@@ -1728,7 +1744,7 @@ const GUIDE_SECTIONS = [
       "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
       "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, or Fatal 4-Way — plus three kinds of Angle, none of which have a winner/loser or cost energy: a Promo (solo mic work, rated on charisma, aim it at someone to nudge or spark a rivalry), a Confrontation (two people face to face, rated on both their charisma, with a real chance of boiling over into a physical swerve — a much bigger rivalry swing than a plain promo), or a Vignette (solo atmosphere-building rated on entertainment instead of charisma, no subject).",
       "Every match resolves with a method — Pinfall, Submission, Disqualification, or Countout — weighted by the winning side's stats. Both the winner and the method default to Auto but can be set by hand once the match is fully booked.",
-      "Every match also has a Purpose — why it's happening, not just what it is. Competitive is a straight fair fight. Steal the Show chases the best possible rating at the cost of more energy for both sides. Put Over books the winner to look like a star at the loser's expense — a real draw power bump for the winner, scaled to who they just beat, and a small happiness hit for the one taking the loss. Squash is a fast, one-sided win purely to get someone over — never a great match, but a bigger credibility injection than Put Over if the loser is any kind of name.",
+      "Every match also has a Purpose and a Match Story — two separate dials. Purpose is why it's happening: Competitive is a straight fair fight, Steal the Show chases the best possible rating at the cost of more energy for both sides, Put Over books the winner to look like a star at the loser's expense (a real draw power bump for the winner, scaled to who they just beat, and a small happiness hit for the one taking the loss), and Squash is a fast, one-sided win purely to get someone over — never a great match, but a bigger credibility injection than Put Over if the loser is any kind of name. Match Story is what kind of match it reads as: Comedy Match trades ceiling for consistency, Back-and-Forth Classic only pays off when the two sides are genuinely close on paper (and falls flat if they're not), and Underdog Story only pays off — in both rating and the winner's draw power — if the lower-rated side actually pulls off the upset.",
       "Booking the exact same matchup over and over gets a real, escalating rating penalty as fans get tired of seeing it — shown as a warning before you run the show. An active rivalry gets that penalty halved, since building toward a blowoff is a real reason to run it back.",
       "Speciality Matches (No DQ, Cage, Ladder, and more) are gated by your company level and cost extra, but boost the rating ceiling and let a wrestler's Specialty-type stat swing the outcome, not just their overall rating.",
       "A Face vs Heel matchup gets a small rating bump for the contrast — booking two of the same alignment against each other is a flatter match.",
@@ -2797,8 +2813,23 @@ export default function BookedRingsideEmpire() {
       const winnerTeam = [participants[winnerIdx]];
       const loserTeam = participants.filter((_, i) => i !== winnerIdx);
       const avgAttr = participants.reduce((s, w) => s + attrOf(w), 0) / participants.length;
+      // Match Story — the narrative hook, independent of Purpose (see
+      // MATCH_STORIES). "classic" and "underdog" depend on how the winner
+      // actually compares to the field, so they're resolved here rather than
+      // as a flat constant.
+      const matchStory = MATCH_STORY_BY_ID[seg.storyId] || MATCH_STORY_BY_ID.standard;
+      const loserAvgAttrMM = loserTeam.length ? loserTeam.reduce((s, w) => s + attrOf(w), 0) / loserTeam.length : avgAttr;
+      const winnerAttrMM = attrOf(winnerTeam[0]);
+      let storyCapBonusMM = matchStory.capBonus || 0;
+      if (matchStory.id === "classic") {
+        const gap = Math.abs(winnerAttrMM - loserAvgAttrMM) / Math.max(1, (winnerAttrMM + loserAvgAttrMM) / 2);
+        storyCapBonusMM = gap < 0.15 ? 8 : gap < 0.3 ? 2 : -6;
+      }
+      const isUpsetMM = matchStory.id === "underdog" && winnerAttrMM < loserAvgAttrMM;
+      cap = Math.max(20, cap + storyCapBonusMM);
       const rawFloor = Math.round(avgAttr * 0.25);
-      const floor = Math.min(cap, rawFloor);
+      let floor = Math.min(cap, rawFloor);
+      if (matchStory.floorBoostFrac) floor = Math.round(floor + (cap - floor) * matchStory.floorBoostFrac);
       const spread = Math.min(cap - floor, Math.round(20 + avgAttr * 0.55));
       let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread) + 3)); // scrambles run a touch hotter
       const specialty = seg.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === seg.specialtyId) : null;
@@ -2807,7 +2838,7 @@ export default function BookedRingsideEmpire() {
       // the moments that reputation is named for — title matches and the
       // Main Event, not a flat bonus everywhere.
       const clutchBonus = (label === "Main Event" || !!seg.titleId) && participants.some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
-      rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus);
+      rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetMM ? 6 : 0));
       let titleInfo = null;
       if (seg.titleId) {
         const title = titles.find((t) => t.id === seg.titleId);
@@ -2818,7 +2849,7 @@ export default function BookedRingsideEmpire() {
         }
       }
       const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, participants) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id };
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM };
     }
     const team1 = seg.team1.filter(Boolean);
     const team2 = seg.team2.filter(Boolean);
@@ -2846,8 +2877,21 @@ export default function BookedRingsideEmpire() {
       ? (team1.some((w) => w.name === previousResult.winnerTeam[0].name) ? team1 : team2) : null;
     const winnerTeam = overrideSide || stickySide || (Math.random() < prob1 ? team1 : team2);
     const loserTeam = winnerTeam === team1 ? team2 : team1;
+    // Match Story — see the multi-man branch above for why "classic" and
+    // "underdog" are resolved here instead of as a flat constant.
+    const matchStory = MATCH_STORY_BY_ID[seg.storyId] || MATCH_STORY_BY_ID.standard;
+    const winnerAttrST = teamAttr(winnerTeam);
+    const loserAttrST = teamAttr(loserTeam);
+    let storyCapBonusST = matchStory.capBonus || 0;
+    if (matchStory.id === "classic") {
+      const gap = Math.abs(winnerAttrST - loserAttrST) / Math.max(1, (winnerAttrST + loserAttrST) / 2);
+      storyCapBonusST = gap < 0.15 ? 8 : gap < 0.3 ? 2 : -6;
+    }
+    const isUpsetST = matchStory.id === "underdog" && winnerAttrST < loserAttrST;
+    cap = Math.max(20, cap + storyCapBonusST);
     const rawFloor = Math.round(((effAttr1 + effAttr2) / 2) * 0.25);
-    const floor = Math.min(cap, rawFloor);
+    let floor = Math.min(cap, rawFloor);
+    if (matchStory.floorBoostFrac) floor = Math.round(floor + (cap - floor) * matchStory.floorBoostFrac);
     const avgEffAttr = (effAttr1 + effAttr2) / 2;
     const spread = Math.min(cap - floor, Math.round(20 + avgEffAttr * 0.55));
     let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread)));
@@ -2903,9 +2947,9 @@ export default function BookedRingsideEmpire() {
     // the moments that reputation is named for — title matches and the Main
     // Event, not a flat bonus everywhere.
     const clutchBonus = (label === "Main Event" || !!seg.titleId) && [...team1, ...team2].some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
-    rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus);
+    rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetST ? 6 : 0));
     const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, [...team1, ...team2]) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id };
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST };
   };
 
   // Applies a field update to one segment, then re-resolves it (or clears
@@ -2960,6 +3004,7 @@ export default function BookedRingsideEmpire() {
   const setSegmentWinner = (id, name) => updateSegment(id, (s) => ({ ...s, winnerOverride: name }));
   const setSegmentWinMethod = (id, method) => updateSegment(id, (s) => ({ ...s, winMethodOverride: method }));
   const setSegmentPurpose = (id, purposeId) => updateSegment(id, (s) => ({ ...s, purposeId }));
+  const setSegmentStory = (id, storyId) => updateSegment(id, (s) => ({ ...s, storyId }));
 
   // Dark matches resolve the same way a segment does — the moment both
   // sides are filled, roll a winner (for flavor text only; it never touches
@@ -4008,6 +4053,10 @@ export default function BookedRingsideEmpire() {
             let purposeHappinessAdj = 0;
             if (inMatch.purpose === "putover") { if (won) purposeDrawBonus += opponentDraw * 0.15; else purposeHappinessAdj -= 1; }
             if (inMatch.purpose === "squash") { if (won) purposeDrawBonus += opponentDraw * 0.25; else purposeDrawBonus -= 2; }
+            // An Underdog Story (see MATCH_STORIES) only pays off if the upset
+            // actually happened — the winner gets a real draw-power jolt out of
+            // beating someone they weren't supposed to.
+            if (inMatch.matchStory === "underdog" && inMatch.upsetHappened && won) purposeDrawBonus += 4;
             updated = { ...updated, matches: updated.matches + 1, wins: updated.wins + (won ? 1 : 0), losses: updated.losses + (won ? 0 : 1), rankingPts: clamp(updated.rankingPts + (won ? 5 : -3), -50, 150), happiness: clamp(updated.happiness + (won ? 1 : -2) + purposeHappinessAdj, 0, 100) };
             // A win teaches you something — small, slow, tied to how it was won.
             // Pinfalls sharpen offense, submissions sharpen technical ability.
@@ -6897,6 +6946,17 @@ export default function BookedRingsideEmpire() {
                           {(slot.purposeId && slot.purposeId !== "competitive") && (
                             <div className="text-[9px] text-[#8B8593] italic">{MATCH_PURPOSE_BY_ID[slot.purposeId]?.desc}</div>
                           )}
+                          <div className="flex items-start gap-2">
+                            <Swords size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                            <div className="flex gap-1 flex-wrap">
+                              {MATCH_STORIES.map((s) => (
+                                <button key={s.id} onClick={() => setSegmentStory(slot.id, s.id)} title={s.desc} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(slot.storyId || "standard") === s.id ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{s.label}</button>
+                              ))}
+                            </div>
+                          </div>
+                          {(slot.storyId && slot.storyId !== "standard") && (
+                            <div className="text-[9px] text-[#8B8593] italic">{MATCH_STORY_BY_ID[slot.storyId]?.desc}</div>
+                          )}
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
                               <Award size={12} className="text-[#8B6BC0] shrink-0" />
@@ -7019,6 +7079,17 @@ export default function BookedRingsideEmpire() {
                           {(slot.purposeId && slot.purposeId !== "competitive") && (
                             <div className="text-[9px] text-[#8B8593] italic">{MATCH_PURPOSE_BY_ID[slot.purposeId]?.desc}</div>
                           )}
+                          <div className="flex items-start gap-2">
+                            <Swords size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                            <div className="flex gap-1 flex-wrap">
+                              {MATCH_STORIES.map((s) => (
+                                <button key={s.id} onClick={() => setSegmentStory(slot.id, s.id)} title={s.desc} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(slot.storyId || "standard") === s.id ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{s.label}</button>
+                              ))}
+                            </div>
+                          </div>
+                          {(slot.storyId && slot.storyId !== "standard") && (
+                            <div className="text-[9px] text-[#8B8593] italic">{MATCH_STORY_BY_ID[slot.storyId]?.desc}</div>
+                          )}
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
                               <Award size={12} className="text-[#8B6BC0] shrink-0" />
@@ -7051,7 +7122,7 @@ export default function BookedRingsideEmpire() {
 
                       {slot.result && (
                         <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-2.5">
-                          <div className="text-[9px] text-[#8B8593] mb-1 flex items-center gap-1"><Check size={11} className="text-[#8B6BC0]" /> RESOLVED {slot.result.specialty ? `· ${slot.result.specialty.name.toUpperCase()}` : ""}{slot.result.winMethod ? ` · VIA ${slot.result.winMethod.toUpperCase()}` : ""}{slot.result.purpose && slot.result.purpose !== "competitive" ? ` · ${MATCH_PURPOSE_BY_ID[slot.result.purpose]?.label.toUpperCase()}` : ""}</div>
+                          <div className="text-[9px] text-[#8B8593] mb-1 flex items-center gap-1"><Check size={11} className="text-[#8B6BC0]" /> RESOLVED {slot.result.specialty ? `· ${slot.result.specialty.name.toUpperCase()}` : ""}{slot.result.winMethod ? ` · VIA ${slot.result.winMethod.toUpperCase()}` : ""}{slot.result.purpose && slot.result.purpose !== "competitive" ? ` · ${MATCH_PURPOSE_BY_ID[slot.result.purpose]?.label.toUpperCase()}` : ""}{slot.result.matchStory && slot.result.matchStory !== "standard" ? ` · ${MATCH_STORY_BY_ID[slot.result.matchStory]?.label.toUpperCase()}${slot.result.matchStory === "underdog" && slot.result.upsetHappened ? " (UPSET!)" : ""}` : ""}</div>
                           {slot.result.format === "segment" ? (
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-bold text-[#F2ECDD]">{angleResultText(slot.result)}</span>
