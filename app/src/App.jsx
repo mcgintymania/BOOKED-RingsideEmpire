@@ -1747,6 +1747,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Staff (Menu) covers seven behind-the-scenes roles, each hired straight from a standing candidate pool — no bidding against yourself, just pick a candidate and offer a contract. Agent, Referee, and Assistant Booker all raise the ceiling your matches can realistically hit; Medical Staff cuts injury odds and shortens recovery; Ring Crew reduces the odds of a general company catastrophe (lawsuits, tax audits, scandals); Security does the same for crowd and venue incidents specifically (fights, barrier jumps, backstage breaches); Trainer speeds up how fast Developmental prospects close the gap to their potential. Only your single best hire per role counts — a second Agent doesn't stack with the first.",
       "Rivals aren't just sitting there — every non-acquired rival company competes for the exact same candidate pool, hiring and occasionally losing staff of their own over time. Anyone a rival's already snapped up shows up greyed out in your Candidates list rather than just vanishing, so you can see the competition for talent happening.",
+      "Once you've founded a Developmental feeder promotion (Back Office), its Promotions screen entry becomes a full Training School profile: your hired Trainer(s) by name, every current trainee's progress bar toward their potential, and an Alumni list of everyone who's actually graduated to your main roster.",
     ],
   },
   {
@@ -1946,6 +1947,7 @@ export default function BookedRingsideEmpire() {
   // their roster frees up, and they're shown as owned rather than active).
   const [workingAgreements, setWorkingAgreements] = useState([]); // rival company ids
   const [feederCompany, setFeederCompany] = useState(null); // { name, foundedWeek }
+  const [developmentalAlumni, setDevelopmentalAlumni] = useState([]); // [{name, overall, tier, graduatedWeek, year, weekOfYear}] — graduates of the Training School
   const [newFeederName, setNewFeederName] = useState("");
   const [productionTier, setProductionTier] = useState(0); // index into PRODUCTION_TIERS
   const [staffPool, setStaffPool] = useState(() => buildStaffPool());
@@ -4086,6 +4088,7 @@ export default function BookedRingsideEmpire() {
       const retiringStaffCandidates = []; // ex-wrestlers whose retirement rolled them into a staff career
       const legacyQueue = []; // retirees whose retirement rolled them a legacy child, debuting decades later
       const developmentBreakoutNames = []; // developmental talent that trained up to their potential this tick
+      const developmentBreakoutRecords = []; // richer version of the above, for the Training School's Alumni list
       setPool((p) => {
         let next = p.map((w) => {
           const inMatch = matches.find((mm) => mm.format === "match" && (mm.team1.some((x) => x.name === w.name) || mm.team2.some((x) => x.name === w.name)));
@@ -4311,6 +4314,7 @@ export default function BookedRingsideEmpire() {
           }
           if (wasBelowPotential && aged.rosterLevel === "developmental" && avgStats(aged) >= potentialOf(aged) - 0.5) {
             developmentBreakoutNames.push(aged.name);
+            developmentBreakoutRecords.push({ name: aged.name, overall: Math.round(avgStats(aged)), tier: aged.tier });
           }
           return aged;
         });
@@ -4381,6 +4385,12 @@ export default function BookedRingsideEmpire() {
         }
         if (developmentBreakoutNames.length > 0) {
           setUniverseFeed((feed) => [...developmentBreakoutNames.map((name, i) => ({ id: `dev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${name} has developed into a legitimate prospect — they've outgrown what Developmental can teach them and are ready for the main roster.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
+        }
+        if (developmentBreakoutRecords.length > 0) {
+          setDevelopmentalAlumni((al) => [
+            ...developmentBreakoutRecords.map((r) => ({ ...r, graduatedWeek: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber) })),
+            ...al,
+          ].slice(0, 100));
         }
         return next;
       });
@@ -4535,7 +4545,7 @@ export default function BookedRingsideEmpire() {
     pendingLegacies, hasSeenLegacyDebut,
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
-    scheduledEvents, eventTemplates, workingAgreements, feederCompany,
+    scheduledEvents, eventTemplates, workingAgreements, feederCompany, developmentalAlumni,
     staffPool, productionTier, fanTrendKey, shortlist, pendingOffers, showsDoneThisWeek,
   });
 
@@ -4581,6 +4591,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates(s.eventTemplates || []);
     setWorkingAgreements(s.workingAgreements || []);
     setFeederCompany(s.feederCompany || null);
+    setDevelopmentalAlumni(s.developmentalAlumni || []);
     setProductionTier(s.productionTier ?? 0);
     setFanTrendKey(s.fanTrendKey || FAN_TRENDS[0].key);
     setStaffPool(s.staffPool || buildStaffPool());
@@ -4842,6 +4853,7 @@ export default function BookedRingsideEmpire() {
     setEventTemplates([]);
     setWorkingAgreements([]);
     setFeederCompany(null);
+    setDevelopmentalAlumni([]);
     setProductionTier(0);
     setFanTrendKey(FAN_TRENDS[rand(0, FAN_TRENDS.length - 1)].key);
     setPendingLegacies([]);
@@ -6628,17 +6640,53 @@ export default function BookedRingsideEmpire() {
 
             {feederCompany && (() => {
               const feederShows = showHistory.filter((r) => r.showLevel === "developmental");
-              const feederRosterSize = roster.filter((w) => w.rosterLevel === "developmental").length;
+              const trainees = roster.filter((w) => w.rosterLevel === "developmental");
               const avgRating = feederShows.length ? Math.round(feederShows.reduce((s, r) => s + r.fullRating, 0) / feederShows.length) : 0;
+              const trainers = staffPool.filter((s) => s.role === "trainer" && s.contractedTo === "player");
               return (
                 <div className="mt-4">
-                  <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">YOUR FEEDER PROMOTION</div>
-                  <div className="bg-[#241B33] border border-[#5B3B8C] rounded-lg p-3">
+                  <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">YOUR TRAINING SCHOOL</div>
+                  <div className="bg-[#241B33] border border-[#5B3B8C] rounded-lg p-3 mb-3">
                     <div className="font-bold text-sm mb-1">{feederCompany.name}</div>
                     <div className="text-[10px] text-[#8B8593]">
-                      Founded Y{yearOf(feederCompany.foundedWeek)} Wk{weekOfYear(feederCompany.foundedWeek)} &middot; Roster: {feederRosterSize} &middot; Shows run: {feederShows.length} &middot; Avg. rating: {avgRating}
+                      Founded Y{yearOf(feederCompany.foundedWeek)} Wk{weekOfYear(feederCompany.foundedWeek)} &middot; Trainees: {trainees.length} &middot; Shows run: {feederShows.length} &middot; Avg. rating: {avgRating}
                     </div>
-                    <div className="text-[9px] text-[#8B8593] italic mt-1">Built from shows booked at the Developmental level — manage it from Book &middot; Show Level and Roster &middot; Developmental. Anyone assigned there trains toward their potential every week, faster if you actually book them — booking them against a noticeably more experienced opponent (bring in a veteran per-use name) adds an extra boost, and a hired Trainer (Staff) raises the odds every week. Check their Roster card for progress.</div>
+                    <div className="text-[10px] text-[#8B8593] mt-1">
+                      {trainers.length > 0 ? <>Trainer{trainers.length === 1 ? "" : "s"}: <span className="text-[#F2ECDD] font-semibold">{trainers.map((t) => `${t.name} (${t.skill})`).join(", ")}</span></> : <span className="italic">No Trainer hired yet — one on Staff raises every trainee's odds of closing the gap each week.</span>}
+                    </div>
+                    <div className="text-[9px] text-[#8B8593] italic mt-1">Built from shows booked at the Developmental level — manage it from Book &middot; Show Level and Roster &middot; Developmental. Booking a trainee against a noticeably more experienced opponent (a veteran per-use name) adds an extra boost.</div>
+                  </div>
+
+                  {trainees.length > 0 && (
+                    <div className="mb-3">
+                      <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">CURRENT TRAINEES</div>
+                      <div className="space-y-1.5">
+                        {trainees.map((w) => {
+                          const pot = Math.round(potentialOf(w));
+                          const cur = Math.round(avgStats(w));
+                          const pct = Math.min(100, Math.round((cur / Math.max(1, pot)) * 100));
+                          return (
+                            <div key={w.name} className="bg-[#131117] rounded-lg p-2">
+                              <div className="flex justify-between text-[10px] mb-0.5"><span className="font-semibold">{w.name}</span><span className="text-[#8B8593]">Potential {pot}</span></div>
+                              <div className="h-1 bg-[#0A0A0C] rounded-full overflow-hidden"><div className="h-full bg-[#8B6BC0]" style={{ width: `${pct}%` }} /></div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">ALUMNI</div>
+                    {developmentalAlumni.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {developmentalAlumni.map((a, i) => (
+                          <span key={`${a.name}-${a.graduatedWeek}-${i}`} className="text-[11px] bg-[#131117] border border-[#2B2733] rounded-full px-2 py-1" title={`Graduated Y${a.year} Wk${a.weekOfYear} at ${a.overall} overall (${a.tier})`}>
+                            {a.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : <div className="text-xs text-[#8B8593] italic">No graduates yet — a trainee shows up here once they train up to their potential and move to the main roster.</div>}
                   </div>
                 </div>
               );
