@@ -288,6 +288,9 @@ function makeSegment(format) {
     winnerOverride: null, winMethodOverride: null,
     purposeId: "competitive",
     storyId: "standard",
+    // Free-text roleplay/script fields — purely flavor, no mechanical effect.
+    // Shown under the segment in the card builder, show results, and history.
+    customName: "", script: "",
     result: null,
   };
 }
@@ -1225,6 +1228,7 @@ const REQUEST_TYPES = [
   { type: "push", text: (w) => `${w.name} wants to be pushed to the Main Event.` },
   { type: "time-off", text: (w) => `${w.name} is asking for some time off.` },
   { type: "match", text: null }, // target picked at generation time, text built specially
+  { type: "role-change", text: null, minAge: 33 }, // target role picked at generation time, text built specially — only raised by wrestlers old enough to be eyeing a second act
 ];
 const HAPPINESS_DECLINE_PENALTY = -15;
 const HAPPINESS_BROKEN_PENALTY = -25;
@@ -1552,7 +1556,7 @@ function WrestlerDetailModal({ wrestler, pool, titles, weekNumber, perUseRoster,
               <option value="">Default ({wrestler.tier}, from ability)</option>
               {TIER_ORDER.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
-            <span className="text-[9px] text-[#8B8593] italic">Your call as booker — doesn't change their actual ability.</span>
+            <span className="text-[9px] text-[#8B8593] italic">Your call as booker — doesn't change their actual ability, but a promotion or demotion is a real happiness swing.</span>
           </div>
         )}
         {isYourPerUse && <div className="text-[10px] text-[#8B6BC0] font-semibold mb-1">Also on your Per-Use roster — bookable per show, not exclusive.</div>}
@@ -1718,11 +1722,11 @@ const GUIDE_SECTIONS = [
       "There are two ways to use a wrestler: sign them Exclusive (a standing weekly wage, guaranteed available, no per-appearance fee) or add them to your Per-Use list (free to add, but you negotiate a fee — Low/Medium/High offer, cheaper offers are more likely refused, and a refusal sometimes comes back as a counteroffer to accept or walk away from — then pay it each time you actually book them). Per-use settles on the spot. An Exclusive offer doesn't — it posts to the News and opens a bidding war that settles in a few weeks, giving a rival time to notice and counter-bid with their own money, length, and reputation. The wrestler weighs every offer on the table themselves: money, how much room there is to actually grow at that company, its popularity, and whether the length fits their career stage — a young up-and-comer is wary of a long exclusive deal with a small promotion, a veteran doesn't mind the security.",
       "A contract within its last few weeks is poachable the same way — if you don't extend it, a rival might already be circling, and whoever makes the better overall case wins them when it actually lapses. Extend early from the Roster tab to settle it outright and shut any brewing interest down.",
       "Star a wrestler from the Wrestlers list to add them to your Shortlist (filter for \"Shortlisted only\" to see just them, whoever they're signed to right now) — a running watchlist for names you're building toward, not just who's available this week. The Wrestlers tab also surfaces a \"Who To Chase Next\" panel of the best free agents currently within your reach.",
-      "A wrestler's Overall stat is fixed ability — it never changes from booking decisions. Push (their card status, from Jobber up to Legend) is separate and yours to set for anyone signed to you, exclusive or per-use — a skilled worker can be booked as a jobber, and nobody becomes a Legend just from good stats alone. Same goes for Alignment and renaming: editable for your own people, read-only for anyone signed elsewhere.",
+      "A wrestler's Overall stat is fixed ability — it never changes from booking decisions. Push (their card status, from Jobber up to Legend) is separate and yours to set for anyone signed to you, exclusive or per-use — a skilled worker can be booked as a jobber, and nobody becomes a Legend just from good stats alone. You can set their starting Push right in the SIGN offer too, not just afterward. Either way, a real promotion or demotion is a genuine happiness swing, up or down, scaled to how many rungs it actually was. Same goes for Alignment and renaming: editable for your own people, read-only for anyone signed elsewhere.",
       "Wrestlers age in real time — every 52 weeks, everyone gets a year older. Past 35 there's a real chance of small permanent dips to their physical stats; past 30, experience can show up as a charisma or mic-skill bump instead. A win also has a small chance of a tiny permanent boost tied to how it was won.",
       "Every wrestler also has Draw Power — how much they actually pull a crowd, separate from in-ring ability. It grows from winning, good matches, and title moments, and fades slowly if they're never booked anywhere. Who you put in the Main Event can swing a show's attendance up to ±25%.",
       "A Per-Use offer might get turned down — if refused outright, they're off-limits to you for 1-3 weeks before you can try again. Releasing an Exclusive wrestler mid-contract also costs a buyout, 50% of their remaining contract wage, shown before you confirm.",
-      "Wrestlers have Energy (drains with use, recovers when rested — low energy hurts both their win chance and the match rating, but never permanently affects their Overall) and Happiness (affected by requests you promise and then fulfil, break, or decline, plus wins, losses, injuries, and title changes). Watch the Requests tab under Roster for what your talent is asking for.",
+      "Wrestlers have Energy (drains with use, recovers when rested — low energy hurts both their win chance and the match rating, but never permanently affects their Overall) and Happiness (affected by requests you promise and then fulfil, break, or decline, plus wins, losses, injuries, and title changes). Watch the Requests tab under Roster for what your talent is asking for. A wrestler 33 or older occasionally asks for a Role Change instead — granting it retires them from in-ring competition straight into your Staff candidate pool as an Agent, Assistant Booker, or Trainer, the same destination some retirees land in on their own.",
       "Injuries can happen after a draining match, sidelining someone 3-52 weeks with a specific injury type (knee, back, concussion, and others) — including champions, who are forced to vacate their title if it happens to them.",
       "Some retirees leave a legacy — a kid who grows up around the business and debuts as a free agent 15-20 years later, carrying the family name. You won't see it happen when it's rolled, only when the kid actually shows up in the News — their Potential is pulled toward how good the parent really was at their peak, not whatever they'd declined to by retirement, so a legendary career can genuinely pay off a generation later.",
       "A wrestler's detail screen can show Traits — tags earned from who they've actually become over their career, not rolled at creation: Fan Favorite (high draw power, and it keeps snowballing), Workhorse (serious ring-time logged), Flight Risk (unhappy right now), Locker Room Leader (happy and experienced), Clutch Performer (a strong win rate plus a title reign — gets a small rating bump specifically in title matches and the Main Event), Rising Star (young with real room left against their Potential), and Second Generation (a legacy debut). Nothing to manage here — they just read as a snapshot of the career so far.",
@@ -1962,6 +1966,7 @@ export default function BookedRingsideEmpire() {
   const [hireWeeks, setHireWeeks] = useState(26);
   const [hireLevel, setHireLevel] = useState("main");
   const [hireWageKey, setHireWageKey] = useState("standard");
+  const [hirePushLevel, setHirePushLevel] = useState(null);
   const [scoutingTarget, setScoutingTarget] = useState(null);
   const [scoutResult, setScoutResult] = useState(null);
   const [extendingTarget, setExtendingTarget] = useState(null);
@@ -2200,13 +2205,22 @@ export default function BookedRingsideEmpire() {
     setDetailWrestler((d) => (d ? { ...d, alignment } : d));
   };
   const setPush = (name, pushOverride) => {
-    setPool((p) => p.map((w) => (w.name === name ? { ...w, pushOverride } : w)));
+    setPool((p) => p.map((w) => {
+      if (w.name !== name) return w;
+      // A real promotion or demotion on the card is a real moment for a
+      // wrestler — happy to move up, stings to move down, scaled by how
+      // many rungs it actually was rather than a flat amount either way.
+      const oldIdx = TIER_ORDER.indexOf(effectiveTier(w));
+      const newIdx = TIER_ORDER.indexOf(pushOverride || w.tier);
+      const moraleDelta = (oldIdx >= 0 && newIdx >= 0) ? (newIdx - oldIdx) * 4 : 0;
+      return { ...w, pushOverride, happiness: clamp(w.happiness + moraleDelta, 0, 100) };
+    }));
     setDetailWrestler((d) => (d ? { ...d, pushOverride } : d));
   };
 
   const hireTierCap = HIRE_TIER_CAP[popularityTier(popularity)];
   const exceedsHireCap = (w) => hireTierCap != null && TIER_ORDER.indexOf(w.tier) > TIER_ORDER.indexOf(hireTierCap);
-  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireLevel("main"); setHireWageKey("standard"); };
+  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireLevel("main"); setHireWageKey("standard"); setHirePushLevel(null); };
   const happinessRefusalAdj = (w) => {
     if (w.happiness < 20) return 0.3;
     if (w.happiness < 40) return 0.15;
@@ -2234,7 +2248,7 @@ export default function BookedRingsideEmpire() {
     if (!hiringTarget || exceedsHireCap(hiringTarget)) return;
     const offer = HIRE_WAGE_OFFERS.find((o) => o.key === hireWageKey);
     const signedLevel = hireLevel === "developmental" && feederCompany ? "developmental" : "main";
-    const myOffer = { companyId: "player", wageMult: offer.mult, contractWeeks: hireWeeks, level: signedLevel };
+    const myOffer = { companyId: "player", wageMult: offer.mult, contractWeeks: hireWeeks, level: signedLevel, pushLevel: hirePushLevel };
     const isNewApproach = !pendingOffers.some((e) => e.wrestlerName === hiringTarget.name);
     setPendingOffers((po) => {
       const idx = po.findIndex((e) => e.wrestlerName === hiringTarget.name);
@@ -2663,6 +2677,25 @@ export default function BookedRingsideEmpire() {
   };
   const fulfillRequest = (req) => {
     setRequests((rs) => rs.filter((r) => r.id !== req.id));
+    // A role-change isn't a stat tweak — granting it retires them from
+    // in-ring competition into the staff pool outright, same destination as
+    // a wrestler who rolls this on the way into retirement (see
+    // RETIRE_TO_STAFF_CHANCE), just requested instead of random.
+    if (req.type === "role-change") {
+      const w = pool.find((x) => x.name === req.wrestlerName);
+      if (!w) return;
+      const roleLabel = STAFF_ROLES.find((r) => r.key === req.targetRole)?.label || req.targetRole;
+      const skill = clamp(Math.round(avgStats(w) * 0.7 + w.titleReigns * 5), 20, 95);
+      setStaffPool((sp) => [...sp, { id: `rolechange-${w.name}-${weekNumber}`, name: w.name, role: req.targetRole, skill, contractedTo: null, contractExpiresWeek: null }]);
+      setPool((p) => p.filter((x) => x.name !== w.name));
+      setPerUseRoster((pu) => pu.filter((n) => n !== w.name));
+      if ((w.holdsTitles || []).length > 0) {
+        setTitles((ts) => ts.map((t) => (t.holders.includes(w.name) ? { ...t, holders: [], reignStartWeek: null, currentReignDefenses: 0, history: [...t.history, { holderNames: t.holders, reignWeeks: t.reignStartWeek !== null ? weekNumber - t.reignStartWeek : 0, wonWeek: t.reignStartWeek, lostWeek: weekNumber, defenses: t.currentReignDefenses || 0, vacatedByRetirement: true }] } : t)));
+        setRivalTitles((ts) => ts.map((t) => (t.holder === w.name ? { ...t, holder: null } : t)));
+      }
+      setUniverseFeed((feed) => [{ id: `rolechange-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${w.name} has stepped away from in-ring competition to become ${/^[aeiou]/i.test(roleLabel) ? "an" : "a"} ${roleLabel} — available to hire from the Staff screen.`, type: "rumor", companyId: w.contractedTo }, ...feed].slice(0, 300));
+      return;
+    }
     setPool((p) => p.map((w) => {
       if (w.name !== req.wrestlerName) return w;
       const happier = { ...w, happiness: clamp(w.happiness + HAPPINESS_FULFILLED_BONUS, 0, 100) };
@@ -2788,7 +2821,7 @@ export default function BookedRingsideEmpire() {
       // tick) instead of a promo's usual energy recovery.
       const brawl = angleType === "confrontation" && !!subject && Math.random() < 0.25;
       const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus + trendBonus) + (brawl ? 6 : 0));
-      return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, titleInfo: null };
+      return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, titleInfo: null, customName: seg.customName || null, script: seg.script || null };
     }
     // Purpose only applies to actual matches — why it's happening (a fair
     // fight, chasing the night's best rating, elevating the winner, or a
@@ -2849,7 +2882,7 @@ export default function BookedRingsideEmpire() {
         }
       }
       const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, participants) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM };
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM, customName: seg.customName || null, script: seg.script || null };
     }
     const team1 = seg.team1.filter(Boolean);
     const team2 = seg.team2.filter(Boolean);
@@ -2949,7 +2982,7 @@ export default function BookedRingsideEmpire() {
     const clutchBonus = (label === "Main Event" || !!seg.titleId) && [...team1, ...team2].some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
     rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetST ? 6 : 0));
     const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, [...team1, ...team2]) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST };
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST, customName: seg.customName || null, script: seg.script || null };
   };
 
   // Applies a field update to one segment, then re-resolves it (or clears
@@ -3005,6 +3038,8 @@ export default function BookedRingsideEmpire() {
   const setSegmentWinMethod = (id, method) => updateSegment(id, (s) => ({ ...s, winMethodOverride: method }));
   const setSegmentPurpose = (id, purposeId) => updateSegment(id, (s) => ({ ...s, purposeId }));
   const setSegmentStory = (id, storyId) => updateSegment(id, (s) => ({ ...s, storyId }));
+  const setSegmentCustomName = (id, customName) => updateSegment(id, (s) => ({ ...s, customName }));
+  const setSegmentScript = (id, script) => updateSegment(id, (s) => ({ ...s, script }));
 
   // Dark matches resolve the same way a segment does — the moment both
   // sides are filled, roll a winner (for flavor text only; it never touches
@@ -3718,7 +3753,7 @@ export default function BookedRingsideEmpire() {
             }
             return;
           }
-          offerPoolUpdates[w.name] = { contractedTo: best.companyId, contractExpiresWeek: weekNumber + best.contractWeeks, wageMultiplier: best.wageMult, rosterLevel: best.level || w.rosterLevel || "main" };
+          offerPoolUpdates[w.name] = { contractedTo: best.companyId, contractExpiresWeek: weekNumber + best.contractWeeks, wageMultiplier: best.wageMult, rosterLevel: best.level || w.rosterLevel || "main", pushOverride: "pushLevel" in best ? best.pushLevel : w.pushOverride };
           if (best.companyId === "player") perUseDrops.push(w.name);
           if (incumbentId && best.companyId !== incumbentId) {
             const fromName = incumbentId === "player" ? companyName : (rivalCompanies.find((c) => c.id === incumbentId)?.name || "their old promotion");
@@ -3951,7 +3986,8 @@ export default function BookedRingsideEmpire() {
       const eligibleForRequest = [...roster, ...perUseWrestlers].filter((w) => !requests.some((r) => r.wrestlerName === w.name));
       eligibleForRequest.forEach((w) => {
         if (Math.random() < REQUEST_CHANCE) {
-          const rt = REQUEST_TYPES[rand(0, REQUEST_TYPES.length - 1)];
+          const eligibleTypes = REQUEST_TYPES.filter((t) => !t.minAge || w.age >= t.minAge);
+          const rt = eligibleTypes[rand(0, eligibleTypes.length - 1)];
           if (rt.type === "match") {
             const useFreelancer = Math.random() < 0.3;
             const freelancerPool = pool.filter((x) => x.contractedTo === null && x.name !== w.name && !bookable.some((b) => b.name === x.name));
@@ -3960,6 +3996,10 @@ export default function BookedRingsideEmpire() {
               const target = candidates[rand(0, candidates.length - 1)];
               newRequests.push({ id: `req-${weekNumber}-${w.name}`, wrestlerName: w.name, type: "match", targetName: target.name, text: `${w.name} wants a match against ${target.name}${!bookable.some((b) => b.name === target.name) ? " — you'll need to sign them first" : ""}.`, weekMade: weekNumber, deadlineWeek: null, status: "pending" });
             }
+          } else if (rt.type === "role-change") {
+            const role = STAFF_CAREER_ROLES[rand(0, STAFF_CAREER_ROLES.length - 1)];
+            const roleLabel = STAFF_ROLES.find((r) => r.key === role)?.label || role;
+            newRequests.push({ id: `req-${weekNumber}-${w.name}`, wrestlerName: w.name, type: "role-change", targetRole: role, text: `${w.name} is thinking about a move into the office — they'd like to become ${/^[aeiou]/i.test(roleLabel) ? "an" : "a"} ${roleLabel}.`, weekMade: weekNumber, deadlineWeek: null, status: "pending" });
           } else {
             newRequests.push({ id: `req-${weekNumber}-${w.name}`, wrestlerName: w.name, type: rt.type, text: rt.text(w), weekMade: weekNumber, deadlineWeek: null, status: "pending" });
           }
@@ -6303,7 +6343,7 @@ export default function BookedRingsideEmpire() {
                       ))}
                     </div>
                     <div className="text-[9px] text-[#8B8593] mb-1">SIGN TO</div>
-                    <div className="flex gap-2 mb-4">
+                    <div className="flex gap-2 mb-3">
                       {["main", "developmental"].map((lvl) => {
                         const devLocked = lvl === "developmental" && !feederCompany;
                         return (
@@ -6319,6 +6359,11 @@ export default function BookedRingsideEmpire() {
                         );
                       })}
                     </div>
+                    <div className="text-[9px] text-[#8B8593] mb-1">CARD POSITION</div>
+                    <select value={hirePushLevel || ""} onChange={(e) => setHirePushLevel(e.target.value || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mb-4">
+                      <option value="">Auto (from ability: {hiringTarget.tier})</option>
+                      {TIER_ORDER.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
                     <button onClick={confirmHire} className="w-full py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded">{entry ? "Raise Your Offer" : "Make An Offer"}</button>
                     <button onClick={() => setHiringTarget(null)} className="w-full mt-2 px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Close</button>
                   </div>
@@ -7120,9 +7165,15 @@ export default function BookedRingsideEmpire() {
                         </>
                       )}
 
+                      <div className="space-y-1">
+                        <input value={slot.customName || ""} onChange={(e) => setSegmentCustomName(slot.id, e.target.value)} placeholder="Segment name (optional)" className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs" />
+                        <textarea value={slot.script || ""} onChange={(e) => setSegmentScript(slot.id, e.target.value)} placeholder="Write your own script or notes for this segment (optional) — shown under it in results and show history. Flavor only, no effect on the outcome." rows={2} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs resize-none" />
+                      </div>
+
                       {slot.result && (
                         <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-2.5">
                           <div className="text-[9px] text-[#8B8593] mb-1 flex items-center gap-1"><Check size={11} className="text-[#8B6BC0]" /> RESOLVED {slot.result.specialty ? `· ${slot.result.specialty.name.toUpperCase()}` : ""}{slot.result.winMethod ? ` · VIA ${slot.result.winMethod.toUpperCase()}` : ""}{slot.result.purpose && slot.result.purpose !== "competitive" ? ` · ${MATCH_PURPOSE_BY_ID[slot.result.purpose]?.label.toUpperCase()}` : ""}{slot.result.matchStory && slot.result.matchStory !== "standard" ? ` · ${MATCH_STORY_BY_ID[slot.result.matchStory]?.label.toUpperCase()}${slot.result.matchStory === "underdog" && slot.result.upsetHappened ? " (UPSET!)" : ""}` : ""}</div>
+                          {slot.result.customName && <div className="text-xs font-bold text-[#8B6BC0] mb-1">{slot.result.customName}</div>}
                           {slot.result.format === "segment" ? (
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-bold text-[#F2ECDD]">{angleResultText(slot.result)}</span>
@@ -7150,6 +7201,7 @@ export default function BookedRingsideEmpire() {
                             </div>
                           )}
                           {slot.result.titleInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={11} /> {slot.result.titleInfo.name} &mdash; {slot.result.titleInfo.label}</div>}
+                          {slot.result.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{slot.result.script}</div>}
                         </div>
                       )}
                     </div>
@@ -7280,6 +7332,7 @@ export default function BookedRingsideEmpire() {
               {showResult.matches.map((m, i) => (
                 <div key={i} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3">
                   <div className="text-[9px] text-[#8B8593] mb-1">{m.slotLabel}{m.format === "segment" ? " · SEGMENT" : ""}{m.specialty ? ` · ${m.specialty.name.toUpperCase()}` : ""}{(m.storyKey || m.stableStoryKey) ? " · RIVALRY" : ""}{m.winMethod ? ` · VIA ${m.winMethod.toUpperCase()}` : ""}</div>
+                  {m.customName && <div className="text-xs font-bold text-[#8B6BC0] mb-1">{m.customName}</div>}
                   {m.format === "segment" ? (
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-[#F2ECDD]">{angleResultText(m)}</span>
@@ -7307,6 +7360,7 @@ export default function BookedRingsideEmpire() {
                     </div>
                   )}
                   {m.titleInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={11} /> {m.titleInfo.name} &mdash; {m.titleInfo.label}</div>}
+                  {m.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                 </div>
               ))}
             </div>
@@ -7394,6 +7448,7 @@ export default function BookedRingsideEmpire() {
                       <div className="px-3 pb-3 space-y-2 border-t border-[#2B2733] pt-3">
                         {r.matches.map((m, i) => (
                           <div key={i}>
+                            {m.customName && <div className="text-xs font-bold text-[#8B6BC0]">{m.customName}</div>}
                             {m.format === "segment" ? (
                               <div className="flex items-center justify-between text-xs">
                                 <span><span className="text-[9px] text-[#8B8593] mr-1">{m.slotLabel}:</span>{angleResultText(m)}</span>
@@ -7423,6 +7478,7 @@ export default function BookedRingsideEmpire() {
                               </div>
                             )}
                             {m.titleInfo && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={10} /> {m.titleInfo.name} &mdash; {m.titleInfo.label}</div>}
+                            {m.script && <div className="mt-0.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                           </div>
                         ))}
                         <div className="grid grid-cols-2 gap-2 text-[10px] pt-2 border-t border-[#2B2733]">
