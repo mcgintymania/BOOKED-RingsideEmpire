@@ -102,6 +102,7 @@ const ACHIEVEMENTS = [
   { id: "survive-catastrophe", name: "Weathered The Storm", desc: "Survive a financial catastrophe", icon: Skull, check: (c) => c.hasSurvivedCatastrophe },
   { id: "get-fired", name: "Learning Experience", desc: "Get fired at least once", icon: Skull, check: (c) => c.hasBeenFired },
   { id: "retire-once", name: "Graceful Exit", desc: "Retire a promotion voluntarily", icon: Flag, check: (c) => c.hasRetiredOnce },
+  { id: "legacy-debut", name: "Blood Runs Thick", desc: "See a second-generation wrestler make their debut", icon: Users, check: (c) => c.hasSeenLegacyDebut },
   { id: "fatal4", name: "Chaos Theory", desc: "Book a Fatal 4-Way match", icon: Swords, check: (c) => c.bookedFatal4Ever },
   { id: "cage-match", name: "Trapped Inside", desc: "Book a Cage match", icon: Lock, check: (c) => c.bookedCageEver },
   { id: "attendance-10k", name: "Packed House", desc: "Run a show with 10,000+ fans", icon: Ticket, check: (c) => c.maxAttendanceEver >= 10000 },
@@ -405,6 +406,16 @@ const STAFF_ROLES = [
 // different career tracks, so a retiree never rolls into those.
 const STAFF_CAREER_ROLES = ["agent", "booker", "trainer"];
 const RETIRE_TO_STAFF_CHANCE = 0.3;
+// A real legacy: some retirees have a kid who grows up around the business
+// and debuts 15-20 years later carrying the family name. Rarer than a staff
+// career (this is flavor for the decades-long playthroughs the game is built
+// for, not a bulk system) — the kid's Potential is pulled toward how good
+// the parent actually was, not their current (likely declined) stats, so a
+// legendary career pays off generations later even if the parent limped to
+// retirement well past their prime.
+const LEGACY_CHANCE = 0.1;
+const LEGACY_DEBUT_DELAY_MIN = WEEKS_PER_YEAR * 15;
+const LEGACY_DEBUT_DELAY_MAX = WEEKS_PER_YEAR * 20;
 function staffWeeklyWage(skill) {
   if (skill <= 20) return 200;
   if (skill <= 35) return 400;
@@ -1588,6 +1599,7 @@ const GUIDE_SECTIONS = [
       "Any offer might get turned down — if refused, they're off-limits to you for 1-3 weeks before you can try again. Releasing an Exclusive wrestler mid-contract also costs a buyout, 50% of their remaining contract wage, shown before you confirm.",
       "Wrestlers have Energy (drains with use, recovers when rested — low energy hurts both their win chance and the match rating, but never permanently affects their Overall) and Happiness (affected by requests you promise and then fulfil, break, or decline, plus wins, losses, injuries, and title changes). Watch the Requests tab under Roster for what your talent is asking for.",
       "Injuries can happen after a draining match, sidelining someone 3-52 weeks with a specific injury type (knee, back, concussion, and others) — including champions, who are forced to vacate their title if it happens to them.",
+      "Some retirees leave a legacy — a kid who grows up around the business and debuts as a free agent 15-20 years later, carrying the family name. You won't see it happen when it's rolled, only when the kid actually shows up in the News — their Potential is pulled toward how good the parent really was at their peak, not whatever they'd declined to by retirement, so a legendary career can genuinely pay off a generation later.",
     ],
   },
   {
@@ -1794,6 +1806,8 @@ export default function BookedRingsideEmpire() {
   const [nextStaggeredDebutIndex, setNextStaggeredDebutIndex] = useState(0);
   const [fanTrendKey, setFanTrendKey] = useState(() => FAN_TRENDS[rand(0, FAN_TRENDS.length - 1)].key);
   const fanTrend = FAN_TRENDS.find((t) => t.key === fanTrendKey) || FAN_TRENDS[0];
+  const [pendingLegacies, setPendingLegacies] = useState([]);
+  const [hasSeenLegacyDebut, setHasSeenLegacyDebut] = useState(false);
 
   const [tab, setTab] = useState("guide");
   const [companySubTab, setCompanySubTab] = useState("overview");
@@ -3440,6 +3454,27 @@ export default function BookedRingsideEmpire() {
         setFanTrendKey(next.key);
         setUniverseFeed((feed) => [{ id: `trend-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `The wrestling world is ${next.news} right now.`, type: "rumor" }, ...feed].slice(0, 300));
       }
+      // A retiree's legacy child finally comes of age, 15-20 years on — debuts
+      // as a free agent like any other newcomer, but their Potential is
+      // pulled toward how good the parent actually was at their peak.
+      const dueLegacies = pendingLegacies.filter((l) => l.debutWeek <= weekNumber);
+      if (dueLegacies.length > 0) {
+        const legacyNewsEntries = [];
+        const legacyWrestlers = dueLegacies.map((l) => {
+          const firstName = FIRST_NAMES_RESERVE[rand(0, FIRST_NAMES_RESERVE.length - 1)];
+          const childName = `${firstName} ${l.surname}`;
+          const startOverall = rand(15, 30);
+          const debutWrestler = makeWrestlerFromOverall(childName, startOverall, { age: rand(18, 21), weightClass: l.weightClass });
+          const childPotential = clamp(Math.round(l.parentQuality * 0.75 + rand(0, 10)), startOverall, 95);
+          legacyNewsEntries.push(`${childName}, ${debutWrestler.sex === "Female" ? "daughter" : "son"} of legendary ${l.parentName}, has made their debut.`);
+          return { ...debutWrestler, potential: childPotential, legacyParent: l.parentName };
+        });
+        poolWithGrowth = [...(poolWithGrowth || []), ...legacyWrestlers];
+        const firedIds = new Set(dueLegacies.map((l) => l.id));
+        setPendingLegacies((lp) => lp.filter((l) => !firedIds.has(l.id)));
+        setUniverseFeed((feed) => [...legacyNewsEntries.map((text, i) => ({ id: `legacy-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text, type: "rumor" })), ...feed].slice(0, 300));
+        setHasSeenLegacyDebut(true);
+      }
 
       // Segment performers get a small permanent bump to whichever stat the
       // angle actually exercised — charisma for a Promo/Confrontation,
@@ -3575,6 +3610,7 @@ export default function BookedRingsideEmpire() {
       const newlyInjuredNames = []; // wrestler names injured this tick, any title they hold gets vacated below
       const retiringWrestlers = []; // { name, contractedTo, holdsTitles } — removed from the pool below, titles vacated after
       const retiringStaffCandidates = []; // ex-wrestlers whose retirement rolled them into a staff career
+      const legacyQueue = []; // retirees whose retirement rolled them a legacy child, debuting decades later
       const developmentBreakoutNames = []; // developmental talent that trained up to their potential this tick
       setPool((p) => {
         let next = p.map((w) => {
@@ -3770,6 +3806,13 @@ export default function BookedRingsideEmpire() {
                   const skill = clamp(Math.round(avgStats(aged) * 0.7 + aged.titleReigns * 5), 20, 95);
                   retiringStaffCandidates.push({ id: `staffret-${aged.name}-${weekNumber}`, name: aged.name, role, skill, contractedTo: null, contractExpiresWeek: null });
                 }
+                // A legacy child inherits a shot at the parent's PEAK quality, not
+                // whatever their stats had declined to by the time they hung it up.
+                if (Math.random() < LEGACY_CHANCE) {
+                  const surname = aged.name.trim().split(" ").slice(-1)[0];
+                  const parentQuality = clamp(Math.round(avgStats(aged) + aged.titleReigns * 5), 20, 95);
+                  legacyQueue.push({ id: `legacy-${aged.name}-${weekNumber}`, parentName: aged.name, surname, parentQuality, weightClass: aged.weightClass, debutWeek: weekNumber + rand(LEGACY_DEBUT_DELAY_MIN, LEGACY_DEBUT_DELAY_MAX) });
+                }
               }
             }
           }
@@ -3838,6 +3881,9 @@ export default function BookedRingsideEmpire() {
           }), ...feed].slice(0, 300));
           if (retiringStaffCandidates.length > 0) {
             setStaffPool((sp) => [...sp, ...retiringStaffCandidates]);
+          }
+          if (legacyQueue.length > 0) {
+            setPendingLegacies((lp) => [...lp, ...legacyQueue]);
           }
         }
         if (developmentBreakoutNames.length > 0) {
@@ -3973,6 +4019,7 @@ export default function BookedRingsideEmpire() {
     bankruptWeeks, peakPopularity, loan, requests, playerLastTier, notes,
     unlockedAchievements, hasEverTakenLoan, hasEverRepaidLoanFully, hasSurvivedCatastrophe,
     hasBeenFired, hasRetiredOnce, hasCreatedStableManually, hasCreatedRivalryManually,
+    pendingLegacies, hasSeenLegacyDebut,
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
     scheduledEvents, eventTemplates, workingAgreements, feederCompany,
@@ -4009,6 +4056,7 @@ export default function BookedRingsideEmpire() {
     setHasEverTakenLoan(!!s.hasEverTakenLoan); setHasEverRepaidLoanFully(!!s.hasEverRepaidLoanFully);
     setHasSurvivedCatastrophe(!!s.hasSurvivedCatastrophe); setHasBeenFired(!!s.hasBeenFired); setHasRetiredOnce(!!s.hasRetiredOnce);
     setHasCreatedStableManually(!!s.hasCreatedStableManually); setHasCreatedRivalryManually(!!s.hasCreatedRivalryManually);
+    setPendingLegacies(s.pendingLegacies || []); setHasSeenLegacyDebut(!!s.hasSeenLegacyDebut);
     setHasRenamedWrestler(!!s.hasRenamedWrestler); setBookedFatal4Ever(!!s.bookedFatal4Ever); setBookedCageEver(!!s.bookedCageEver);
     setMaxAttendanceEver(s.maxAttendanceEver || 0); setHasSoldOutEver(!!s.hasSoldOutEver); setMaxShowRatingEver(s.maxShowRatingEver || 0);
     setHallOfFame(s.hallOfFame || { bestMatch: null, biggestShow: null, longestReign: null, bestMatchRival: null, biggestShowRival: null, longestReignRival: null });
@@ -4146,6 +4194,7 @@ export default function BookedRingsideEmpire() {
     setUnlockedAchievements([]);
     setHasEverTakenLoan(false); setHasEverRepaidLoanFully(false); setHasSurvivedCatastrophe(false);
     setHasBeenFired(false); setHasRetiredOnce(false); setHasCreatedStableManually(false); setHasCreatedRivalryManually(false);
+    setHasSeenLegacyDebut(false);
     setHasRenamedWrestler(false); setBookedFatal4Ever(false); setBookedCageEver(false);
     setMaxAttendanceEver(0); setHasSoldOutEver(false); setMaxShowRatingEver(0);
     setHallOfFame({ bestMatch: null, biggestShow: null, longestReign: null, bestMatchRival: null, biggestShowRival: null, longestReignRival: null });
@@ -4212,6 +4261,7 @@ export default function BookedRingsideEmpire() {
       companyName, playerName, hasRenamedWrestler, titles, bank, weekCount,
       hasCreatedStableManually, hasCreatedRivalryManually,
       hasEverTakenLoan, hasEverRepaidLoanFully, hasSurvivedCatastrophe, hasBeenFired, hasRetiredOnce,
+      hasSeenLegacyDebut,
       bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
       unlockedCitiesCount: unlockedCities.length,
       totalMerchRevenue: Object.values(wrestlerMerchSales).reduce((s, v) => s + v, 0),
@@ -4272,6 +4322,7 @@ export default function BookedRingsideEmpire() {
     setFeederCompany(null);
     setProductionTier(0);
     setFanTrendKey(FAN_TRENDS[rand(0, FAN_TRENDS.length - 1)].key);
+    setPendingLegacies([]);
     setStaffPool(buildStaffPool());
     setSegments([]);
     setDarkMatches([]);
