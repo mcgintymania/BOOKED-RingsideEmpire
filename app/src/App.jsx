@@ -286,6 +286,7 @@ function makeSegment(format) {
     // name on that side), and multi-man alike without needing per-format
     // shapes. winMethodOverride is one of pickWinMethod's own return strings.
     winnerOverride: null, winMethodOverride: null,
+    purposeId: "competitive",
     result: null,
   };
 }
@@ -1335,6 +1336,19 @@ const SPECIALTY_MATCHES = [
   { id: "cage", name: "Cage Match", minTier: "Global", cost: 1500, ratingBonus: 12, statKey: "atk" },
   { id: "chamber", name: "Elimination Chamber", minTier: "Global", cost: 2500, ratingBonus: 15, statKey: "spec" },
 ];
+// Why this match is actually happening — separate from the specialty
+// stipulation above, this is about the BOOKING intent, not the match type.
+// Mirrors the "what's this match for" idea from booking sims like Pro
+// Wrestling Sim: a Competitive match is just a fair fight, but a booker
+// sometimes wants something else out of it (a classic, an endorsement, a
+// fast squash) and should pay a real cost or get a real payoff for it.
+const MATCH_PURPOSES = [
+  { id: "competitive", label: "Competitive", desc: "A straight, fair fight — nothing riding on it beyond the result itself.", capBonus: 0, energyMult: 1 },
+  { id: "showcase", label: "Steal the Show", desc: "Both workers go all out for the best match they can have — harder on their energy, but a real shot at the night's best rating.", capBonus: 8, energyMult: 1.4 },
+  { id: "putover", label: "Put Over", desc: "Booked to make the winner look like a million bucks at the loser's expense — a real draw power bump for the winner, scaled to who they just beat.", capBonus: -3, energyMult: 0.9 },
+  { id: "squash", label: "Squash", desc: "A dominant, one-sided win to get someone over fast — short, never a classic, but a big credibility injection if the loser is any kind of name.", capBonus: -18, energyMult: 0.5 },
+];
+const MATCH_PURPOSE_BY_ID = Object.fromEntries(MATCH_PURPOSES.map((p) => [p.id, p]));
 const SPECIALTY_WEIGHT = 0.5; // how much of the win probability the driving stat controls, vs overall ATTR
 function specialtyUnlocked(type, popularity) {
   return TIER_RANK[popularityTier(popularity)] >= TIER_RANK[type.minTier];
@@ -1712,7 +1726,8 @@ const GUIDE_SECTIONS = [
       "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks. Touring abroad (New York, Mexico City, Tokyo) is gated separately, behind reaching National company tier — a venue is also locked by company tier on top of that (Backyard is always open, Major Arena needs Global).",
       "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
       "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, or Fatal 4-Way — plus three kinds of Angle, none of which have a winner/loser or cost energy: a Promo (solo mic work, rated on charisma, aim it at someone to nudge or spark a rivalry), a Confrontation (two people face to face, rated on both their charisma, with a real chance of boiling over into a physical swerve — a much bigger rivalry swing than a plain promo), or a Vignette (solo atmosphere-building rated on entertainment instead of charisma, no subject).",
-      "Every match resolves with a method — Pinfall, Submission, Disqualification, or Countout — weighted by the winning side's stats.",
+      "Every match resolves with a method — Pinfall, Submission, Disqualification, or Countout — weighted by the winning side's stats. Both the winner and the method default to Auto but can be set by hand once the match is fully booked.",
+      "Every match also has a Purpose — why it's happening, not just what it is. Competitive is a straight fair fight. Steal the Show chases the best possible rating at the cost of more energy for both sides. Put Over books the winner to look like a star at the loser's expense — a real draw power bump for the winner, scaled to who they just beat, and a small happiness hit for the one taking the loss. Squash is a fast, one-sided win purely to get someone over — never a great match, but a bigger credibility injection than Put Over if the loser is any kind of name.",
       "Booking the exact same matchup over and over gets a real, escalating rating penalty as fans get tired of seeing it — shown as a warning before you run the show. An active rivalry gets that penalty halved, since building toward a blowoff is a real reason to run it back.",
       "Speciality Matches (No DQ, Cage, Ladder, and more) are gated by your company level and cost extra, but boost the rating ceiling and let a wrestler's Specialty-type stat swing the outcome, not just their overall rating.",
       "A Face vs Heel matchup gets a small rating bump for the contrast — booking two of the same alignment against each other is a flatter match.",
@@ -1800,22 +1815,6 @@ const GUIDE_SECTIONS = [
 // for a wider layout — no new screens, no tab key not already reachable.
 const SIDEBAR_SECTIONS = [
   {
-    title: "General",
-    items: [
-      { key: "company", label: "Office", icon: Landmark },
-      { key: "news", label: "News", icon: Newspaper },
-      { key: "guide", label: "Guide", icon: BookOpen },
-    ],
-  },
-  {
-    title: "World",
-    items: [
-      { key: "promotions", label: "Promotions", icon: Globe2 },
-      { key: "rankings", label: "Rankings", icon: TrendingUp },
-      { key: "wrestlers", label: "Wrestlers", icon: UserPlus },
-    ],
-  },
-  {
     title: "Your Promotion",
     items: [
       { key: "roster", label: "Roster", icon: Users },
@@ -1830,6 +1829,22 @@ const SIDEBAR_SECTIONS = [
       { key: "halloffame", label: "Hall of Fame", icon: Star },
       { key: "backoffice", label: "Back Office", icon: Landmark },
       { key: "saves", label: "Saves", icon: NotebookPen },
+    ],
+  },
+  {
+    title: "World",
+    items: [
+      { key: "promotions", label: "Promotions", icon: Globe2 },
+      { key: "rankings", label: "Rankings", icon: TrendingUp },
+      { key: "wrestlers", label: "Wrestlers", icon: UserPlus },
+    ],
+  },
+  {
+    title: "General",
+    items: [
+      { key: "company", label: "Office", icon: Landmark },
+      { key: "news", label: "News", icon: Newspaper },
+      { key: "guide", label: "Guide", icon: BookOpen },
     ],
   },
 ];
@@ -2719,7 +2734,7 @@ export default function BookedRingsideEmpire() {
     return prevNames === currNames && prevNames.length > 0;
   };
   const resolveSegmentResult = (seg, index, total, previousResult = null) => {
-    const cap = computeSegmentCap(index, total, seg.minutes);
+    let cap = computeSegmentCap(index, total, seg.minutes);
     const label = segmentLabel(index, total);
     // What the wrestling world wants right now, applied flat wherever this
     // particular segment actually fits the active trend.
@@ -2741,6 +2756,11 @@ export default function BookedRingsideEmpire() {
       const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus + trendBonus) + (brawl ? 6 : 0));
       return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, titleInfo: null };
     }
+    // Purpose only applies to actual matches — why it's happening (a fair
+    // fight, chasing the night's best rating, elevating the winner, or a
+    // fast squash), reflected in how high the match can rate.
+    const purpose = MATCH_PURPOSE_BY_ID[seg.purposeId] || MATCH_PURPOSE_BY_ID.competitive;
+    cap = Math.max(20, cap + purpose.capBonus);
     if (seg.type === "triple" || seg.type === "fatal4") {
       const participants = seg.team1.filter(Boolean);
       const rollAutoWinnerIdx = () => {
@@ -2780,7 +2800,7 @@ export default function BookedRingsideEmpire() {
         }
       }
       const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, participants) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod };
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id };
     }
     const team1 = seg.team1.filter(Boolean);
     const team2 = seg.team2.filter(Boolean);
@@ -2867,7 +2887,7 @@ export default function BookedRingsideEmpire() {
     const clutchBonus = (label === "Main Event" || !!seg.titleId) && [...team1, ...team2].some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
     rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus);
     const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, [...team1, ...team2]) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod };
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id };
   };
 
   // Applies a field update to one segment, then re-resolves it (or clears
@@ -2921,6 +2941,7 @@ export default function BookedRingsideEmpire() {
   const setSegmentMinutes = (id, minutes) => updateSegment(id, (s) => ({ ...s, minutes: clamp(minutes, SEGMENT_MIN_MINUTES, SEGMENT_MAX_MINUTES) }));
   const setSegmentWinner = (id, name) => updateSegment(id, (s) => ({ ...s, winnerOverride: name }));
   const setSegmentWinMethod = (id, method) => updateSegment(id, (s) => ({ ...s, winMethodOverride: method }));
+  const setSegmentPurpose = (id, purposeId) => updateSegment(id, (s) => ({ ...s, purposeId }));
 
   // Dark matches resolve the same way a segment does — the moment both
   // sides are filled, roll a winner (for flavor text only; it never touches
@@ -3923,7 +3944,18 @@ export default function BookedRingsideEmpire() {
           let updated = withTitle;
           if (inMatch) {
             const won = inMatch.winnerTeam.some((x) => x.name === w.name);
-            updated = { ...updated, matches: updated.matches + 1, wins: updated.wins + (won ? 1 : 0), losses: updated.losses + (won ? 0 : 1), rankingPts: clamp(updated.rankingPts + (won ? 5 : -3), -50, 150), happiness: clamp(updated.happiness + (won ? 1 : -2), 0, 100) };
+            // A match booked as a Put Over or a Squash (see MATCH_PURPOSES) is
+            // deliberately lopsided — the winner gets a real draw-power payoff
+            // scaled to who they just beat, and the loser takes it on the chin
+            // (a bit of a happiness hit, since being fed never feels great,
+            // even when it's the job).
+            const opponentTeam = won ? inMatch.loserTeam : inMatch.winnerTeam;
+            const opponentDraw = opponentTeam.length ? opponentTeam.reduce((s, o) => s + (o.drawPower ?? 50), 0) / opponentTeam.length : 50;
+            let purposeDrawBonus = 0;
+            let purposeHappinessAdj = 0;
+            if (inMatch.purpose === "putover") { if (won) purposeDrawBonus += opponentDraw * 0.15; else purposeHappinessAdj -= 1; }
+            if (inMatch.purpose === "squash") { if (won) purposeDrawBonus += opponentDraw * 0.25; else purposeDrawBonus -= 2; }
+            updated = { ...updated, matches: updated.matches + 1, wins: updated.wins + (won ? 1 : 0), losses: updated.losses + (won ? 0 : 1), rankingPts: clamp(updated.rankingPts + (won ? 5 : -3), -50, 150), happiness: clamp(updated.happiness + (won ? 1 : -2) + purposeHappinessAdj, 0, 100) };
             // A win teaches you something — small, slow, tied to how it was won.
             // Pinfalls sharpen offense, submissions sharpen technical ability.
             if (won && Math.random() < 0.15) {
@@ -3935,7 +3967,7 @@ export default function BookedRingsideEmpire() {
             // Already a Fan Favorite (see deriveTraits)? Stars snowball — being
             // over the threshold speeds up growth a little rather than slowing
             // it down, same as a real star's momentum.
-            const drawDelta = (won ? 0.6 : 0.1) + (inMatch.rating > 70 ? 0.8 : 0) + (inMatch.titleInfo ? 1 : 0) + ((updated.drawPower ?? 50) >= 75 ? 0.3 : 0);
+            const drawDelta = (won ? 0.6 : 0.1) + (inMatch.rating > 70 ? 0.8 : 0) + (inMatch.titleInfo ? 1 : 0) + ((updated.drawPower ?? 50) >= 75 ? 0.3 : 0) + purposeDrawBonus;
             updated = { ...updated, drawPower: clamp((updated.drawPower ?? 50) + drawDelta, 0, 100) };
           } else if (rivalMatchOutcomes[w.name]) {
             const won = rivalMatchOutcomes[w.name].won;
@@ -3973,7 +4005,8 @@ export default function BookedRingsideEmpire() {
               injuryWeeksRemaining = remaining;
             }
           } else if (inMatch) {
-            const delta = inMatch.specialty ? rand(ENERGY_LOSS_SPECIALTY[0], ENERGY_LOSS_SPECIALTY[1]) : rand(ENERGY_LOSS_MATCH[0], ENERGY_LOSS_MATCH[1]);
+            const rawDelta = inMatch.specialty ? rand(ENERGY_LOSS_SPECIALTY[0], ENERGY_LOSS_SPECIALTY[1]) : rand(ENERGY_LOSS_MATCH[0], ENERGY_LOSS_MATCH[1]);
+            const delta = Math.round(rawDelta * (MATCH_PURPOSE_BY_ID[inMatch.purpose]?.energyMult ?? 1));
             eng = clamp(eng - delta, 0, 100);
             if (eng < INJURY_ENERGY_THRESHOLD && Math.random() < INJURY_CHANCE * medicalInjuryFactor) {
               const injuryPick = pickInjuryType();
@@ -6785,6 +6818,17 @@ export default function BookedRingsideEmpire() {
                               </div>
                             </>
                           )}
+                          <div className="flex items-start gap-2">
+                            <Sparkles size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                            <div className="flex gap-1 flex-wrap">
+                              {MATCH_PURPOSES.map((p) => (
+                                <button key={p.id} onClick={() => setSegmentPurpose(slot.id, p.id)} title={p.desc} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(slot.purposeId || "competitive") === p.id ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{p.label}</button>
+                              ))}
+                            </div>
+                          </div>
+                          {(slot.purposeId && slot.purposeId !== "competitive") && (
+                            <div className="text-[9px] text-[#8B8593] italic">{MATCH_PURPOSE_BY_ID[slot.purposeId]?.desc}</div>
+                          )}
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
                               <Award size={12} className="text-[#8B6BC0] shrink-0" />
@@ -6896,6 +6940,17 @@ export default function BookedRingsideEmpire() {
                               </>
                             );
                           })()}
+                          <div className="flex items-start gap-2">
+                            <Sparkles size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                            <div className="flex gap-1 flex-wrap">
+                              {MATCH_PURPOSES.map((p) => (
+                                <button key={p.id} onClick={() => setSegmentPurpose(slot.id, p.id)} title={p.desc} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(slot.purposeId || "competitive") === p.id ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{p.label}</button>
+                              ))}
+                            </div>
+                          </div>
+                          {(slot.purposeId && slot.purposeId !== "competitive") && (
+                            <div className="text-[9px] text-[#8B8593] italic">{MATCH_PURPOSE_BY_ID[slot.purposeId]?.desc}</div>
+                          )}
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
                               <Award size={12} className="text-[#8B6BC0] shrink-0" />
@@ -6928,7 +6983,7 @@ export default function BookedRingsideEmpire() {
 
                       {slot.result && (
                         <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-2.5">
-                          <div className="text-[9px] text-[#8B8593] mb-1 flex items-center gap-1"><Check size={11} className="text-[#8B6BC0]" /> RESOLVED {slot.result.specialty ? `· ${slot.result.specialty.name.toUpperCase()}` : ""}{slot.result.winMethod ? ` · VIA ${slot.result.winMethod.toUpperCase()}` : ""}</div>
+                          <div className="text-[9px] text-[#8B8593] mb-1 flex items-center gap-1"><Check size={11} className="text-[#8B6BC0]" /> RESOLVED {slot.result.specialty ? `· ${slot.result.specialty.name.toUpperCase()}` : ""}{slot.result.winMethod ? ` · VIA ${slot.result.winMethod.toUpperCase()}` : ""}{slot.result.purpose && slot.result.purpose !== "competitive" ? ` · ${MATCH_PURPOSE_BY_ID[slot.result.purpose]?.label.toUpperCase()}` : ""}</div>
                           {slot.result.format === "segment" ? (
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-bold text-[#F2ECDD]">{angleResultText(slot.result)}</span>
