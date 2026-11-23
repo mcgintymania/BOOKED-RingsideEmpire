@@ -630,6 +630,33 @@ function rollPotential(avg, age) {
 function potentialOf(w) {
   return w.potential ?? rollPotential(avgStats(w), w.age);
 }
+// Traits are never stored — purely derived, every time, from fields the
+// wrestler already carries. That means they read correctly on any save
+// (old or new) with zero migration, and they can never drift out of sync
+// with the stats that actually produced them. Most are flavor — a read on
+// who this person has become from their career so far — but Fan Favorite
+// and Clutch Performer feed back into the rating/draw formulas (see where
+// each is actually used).
+const TRAIT_DEFS = {
+  fanfavorite: { label: "Fan Favorite", desc: "A genuine crowd-puller. Draw power snowballs a little faster for them — stars get more popular, not less." },
+  workhorse: { label: "Workhorse", desc: "A durable veteran who's logged serious ring time." },
+  flightrisk: { label: "Flight Risk", desc: "Unhappy right now — a broken promise or a bad night could push them to ask out." },
+  leader: { label: "Locker Room Leader", desc: "Content, experienced, and well-regarded backstage." },
+  clutch: { label: "Clutch Performer", desc: "Delivers when it matters — gets a small rating bump in title matches and the Main Event." },
+  risingstar: { label: "Rising Star", desc: "Young, with real room left to grow against their Potential — worth developing." },
+  legacy: { label: "Second Generation", desc: `Follows a parent into the business.` },
+};
+function deriveTraits(w) {
+  const keys = [];
+  if ((w.drawPower ?? 50) >= 75) keys.push("fanfavorite");
+  if (w.matches >= 100) keys.push("workhorse");
+  if (w.happiness <= 30) keys.push("flightrisk");
+  if (w.happiness >= 85 && w.matches >= 30) keys.push("leader");
+  if (w.titleReigns >= 1 && w.wins + w.losses >= 20 && w.wins / (w.wins + w.losses) >= 0.65) keys.push("clutch");
+  if (w.age <= 23 && potentialOf(w) - avgStats(w) >= 15) keys.push("risingstar");
+  if (w.legacyParent) keys.push("legacy");
+  return keys.map((key) => ({ key, ...TRAIT_DEFS[key] }));
+}
 function makeWrestler(name) {
   const stats = {};
   PERFORMANCE_STAT_KEYS.forEach((k) => { stats[k] = rand(20, 95); });
@@ -1410,6 +1437,13 @@ function WrestlerDetailModal({ wrestler, pool, titles, weekNumber, perUseRoster,
           {wrestler.age} yrs &middot; {wrestler.sex} &middot; {wrestler.weightClass} &middot; {employer}
           {contractWeeksLeft !== null && <> &middot; {contractWeeksLeft} week{contractWeeksLeft === 1 ? "" : "s"} left on contract</>}
         </div>
+        {deriveTraits(wrestler).length > 0 && (
+          <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+            {deriveTraits(wrestler).map((t) => (
+              <span key={t.key} title={t.desc} className="text-[9px] font-bold px-2 py-0.5 rounded-full border border-[#5B3B8C] text-[#8B6BC0]">{t.label}</span>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-1.5 mb-1">
           <span className="text-[10px] text-[#8B8593]">Alignment:</span>
           {(wrestler.contractedTo === "player" || isYourPerUse) ? (
@@ -1600,6 +1634,7 @@ const GUIDE_SECTIONS = [
       "Wrestlers have Energy (drains with use, recovers when rested — low energy hurts both their win chance and the match rating, but never permanently affects their Overall) and Happiness (affected by requests you promise and then fulfil, break, or decline, plus wins, losses, injuries, and title changes). Watch the Requests tab under Roster for what your talent is asking for.",
       "Injuries can happen after a draining match, sidelining someone 3-52 weeks with a specific injury type (knee, back, concussion, and others) — including champions, who are forced to vacate their title if it happens to them.",
       "Some retirees leave a legacy — a kid who grows up around the business and debuts as a free agent 15-20 years later, carrying the family name. You won't see it happen when it's rolled, only when the kid actually shows up in the News — their Potential is pulled toward how good the parent really was at their peak, not whatever they'd declined to by retirement, so a legendary career can genuinely pay off a generation later.",
+      "A wrestler's detail screen can show Traits — tags earned from who they've actually become over their career, not rolled at creation: Fan Favorite (high draw power, and it keeps snowballing), Workhorse (serious ring-time logged), Flight Risk (unhappy right now), Locker Room Leader (happy and experienced), Clutch Performer (a strong win rate plus a title reign — gets a small rating bump specifically in title matches and the Main Event), Rising Star (young with real room left against their Potential), and Second Generation (a legacy debut). Nothing to manage here — they just read as a snapshot of the career so far.",
     ],
   },
   {
@@ -2592,7 +2627,11 @@ export default function BookedRingsideEmpire() {
       let rating = Math.max(floor, Math.min(cap, floor + Math.round(Math.random() * spread) + 3)); // scrambles run a touch hotter
       const specialty = seg.specialtyId ? SPECIALTY_MATCHES.find((s) => s.id === seg.specialtyId) : null;
       if (specialty) rating = Math.min(cap, rating + specialty.ratingBonus);
-      rating = Math.min(cap, rating + showQualityBonus + trendBonus);
+      // Clutch Performer (see deriveTraits) earns their reputation in exactly
+      // the moments that reputation is named for — title matches and the
+      // Main Event, not a flat bonus everywhere.
+      const clutchBonus = (label === "Main Event" || !!seg.titleId) && participants.some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
+      rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus);
       let titleInfo = null;
       if (seg.titleId) {
         const title = titles.find((t) => t.id === seg.titleId);
@@ -2680,7 +2719,11 @@ export default function BookedRingsideEmpire() {
         titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
       }
     }
-    rating = Math.min(cap, rating + showQualityBonus + trendBonus);
+    // Clutch Performer (see deriveTraits) earns their reputation in exactly
+    // the moments that reputation is named for — title matches and the Main
+    // Event, not a flat bonus everywhere.
+    const clutchBonus = (label === "Main Event" || !!seg.titleId) && [...team1, ...team2].some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
+    rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus);
     return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod: pickWinMethod(winnerTeam) };
   };
 
@@ -3643,7 +3686,10 @@ export default function BookedRingsideEmpire() {
             }
             // Drawing power — grows from winning, from a genuinely good match, and
             // especially from title moments. This is what actually fills seats.
-            const drawDelta = (won ? 0.6 : 0.1) + (inMatch.rating > 70 ? 0.8 : 0) + (inMatch.titleInfo ? 1 : 0);
+            // Already a Fan Favorite (see deriveTraits)? Stars snowball — being
+            // over the threshold speeds up growth a little rather than slowing
+            // it down, same as a real star's momentum.
+            const drawDelta = (won ? 0.6 : 0.1) + (inMatch.rating > 70 ? 0.8 : 0) + (inMatch.titleInfo ? 1 : 0) + ((updated.drawPower ?? 50) >= 75 ? 0.3 : 0);
             updated = { ...updated, drawPower: clamp((updated.drawPower ?? 50) + drawDelta, 0, 100) };
           } else if (rivalMatchOutcomes[w.name]) {
             const won = rivalMatchOutcomes[w.name].won;
