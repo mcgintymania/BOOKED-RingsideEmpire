@@ -7277,7 +7277,10 @@ export default function BookedRingsideEmpire() {
                 <span className="font-bold text-red-400">UNDERBOOKED!</span> <span className="text-red-200">{showResult.underbookedPenaltyNote}</span>
               </div>
             )}
-            <button onClick={resetShow} className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs text-[#8B8593] hover:text-[#F2ECDD] border border-[#2B2733] rounded"><RotateCcw size={12} /> Book another show</button>
+            <button onClick={resetShow} className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs text-[#8B8593] hover:text-[#F2ECDD] border border-[#2B2733] rounded">
+              <RotateCcw size={12} />
+              {showsDoneThisWeek.length > 0 && activeEventTemplate ? `Move to Next Show (${activeEventTemplate.name})` : "Book Another Show"}
+            </button>
           </div>
         )}
 
