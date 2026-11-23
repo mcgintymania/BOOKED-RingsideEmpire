@@ -281,6 +281,11 @@ function makeSegment(format) {
     team1: [null, null, null, null], team2: [null, null],
     titleId: null, specialtyId: null,
     minutes: SEGMENT_DEFAULT_MINUTES,
+    // null = let the booker's stats decide. Otherwise the name of a wrestler
+    // on the winning side/the winning participant — works for 1v1, tag (any
+    // name on that side), and multi-man alike without needing per-format
+    // shapes. winMethodOverride is one of pickWinMethod's own return strings.
+    winnerOverride: null, winMethodOverride: null,
     result: null,
   };
 }
@@ -2601,7 +2606,18 @@ export default function BookedRingsideEmpire() {
   // result is frozen at whatever position/total it had at that moment,
   // the same way a human booker wouldn't expect match 1's winner to change
   // because they added a match 4.
-  const resolveSegmentResult = (seg, index, total) => {
+  // True when a previous result exists for the exact same set of people —
+  // the signal that a winner (auto-rolled or overridden) should stay put
+  // rather than re-roll just because the booker tweaked minutes, a
+  // specialty, or a title assignment. Changing who's actually in the match
+  // is the only thing that should ever force a fresh roll.
+  const sameParticipants = (previousResult, currentParticipants) => {
+    if (!previousResult || previousResult.format !== "match") return false;
+    const prevNames = [...(previousResult.team1 || []), ...(previousResult.team2 || [])].map((w) => w.name).sort().join("|");
+    const currNames = currentParticipants.map((w) => w.name).sort().join("|");
+    return prevNames === currNames && prevNames.length > 0;
+  };
+  const resolveSegmentResult = (seg, index, total, previousResult = null) => {
     const cap = computeSegmentCap(index, total, seg.minutes);
     const label = segmentLabel(index, total);
     // What the wrestling world wants right now, applied flat wherever this
@@ -2626,13 +2642,19 @@ export default function BookedRingsideEmpire() {
     }
     if (seg.type === "triple" || seg.type === "fatal4") {
       const participants = seg.team1.filter(Boolean);
-      // Fatigue-adjusted weighted random winner — everyone's odds scale with
-      // their effective strength, but it's not a strict 1v1 coin flip.
-      const weights = participants.map((w) => attrOf(w) * (0.6 + 0.4 * (w.eng / 100)));
-      const totalWeight = weights.reduce((a, b) => a + b, 0);
-      let roll = Math.random() * totalWeight;
-      let winnerIdx = 0;
-      for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll <= 0) { winnerIdx = i; break; } }
+      const rollAutoWinnerIdx = () => {
+        // Fatigue-adjusted weighted random winner — everyone's odds scale with
+        // their effective strength, but it's not a strict 1v1 coin flip.
+        const weights = participants.map((w) => attrOf(w) * (0.6 + 0.4 * (w.eng / 100)));
+        const totalWeight = weights.reduce((a, b) => a + b, 0);
+        let roll = Math.random() * totalWeight;
+        for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll <= 0) return i; }
+        return 0;
+      };
+      const overrideIdx = seg.winnerOverride ? participants.findIndex((p) => p.name === seg.winnerOverride) : -1;
+      const stickyIdx = sameParticipants(previousResult, participants) && previousResult.winnerTeam
+        ? participants.findIndex((p) => p.name === previousResult.winnerTeam[0].name) : -1;
+      const winnerIdx = overrideIdx >= 0 ? overrideIdx : stickyIdx >= 0 ? stickyIdx : rollAutoWinnerIdx();
       const winnerTeam = [participants[winnerIdx]];
       const loserTeam = participants.filter((_, i) => i !== winnerIdx);
       const avgAttr = participants.reduce((s, w) => s + attrOf(w), 0) / participants.length;
@@ -2656,7 +2678,8 @@ export default function BookedRingsideEmpire() {
           titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
         }
       }
-      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod: pickWinMethod(winnerTeam) };
+      const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, participants) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod };
     }
     const team1 = seg.team1.filter(Boolean);
     const team2 = seg.team2.filter(Boolean);
@@ -2679,7 +2702,10 @@ export default function BookedRingsideEmpire() {
       const specProb1 = spec1 / (spec1 + spec2);
       prob1 = attrProb1 * (1 - SPECIALTY_WEIGHT) + specProb1 * SPECIALTY_WEIGHT;
     }
-    const winnerTeam = Math.random() < prob1 ? team1 : team2;
+    const overrideSide = seg.winnerOverride ? (team1.some((w) => w.name === seg.winnerOverride) ? team1 : team2.some((w) => w.name === seg.winnerOverride) ? team2 : null) : null;
+    const stickySide = !overrideSide && sameParticipants(previousResult, [...team1, ...team2]) && previousResult.winnerTeam
+      ? (team1.some((w) => w.name === previousResult.winnerTeam[0].name) ? team1 : team2) : null;
+    const winnerTeam = overrideSide || stickySide || (Math.random() < prob1 ? team1 : team2);
     const loserTeam = winnerTeam === team1 ? team2 : team1;
     const rawFloor = Math.round(((effAttr1 + effAttr2) / 2) * 0.25);
     const floor = Math.min(cap, rawFloor);
@@ -2739,7 +2765,8 @@ export default function BookedRingsideEmpire() {
     // Event, not a flat bonus everywhere.
     const clutchBonus = (label === "Main Event" || !!seg.titleId) && [...team1, ...team2].some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
     rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus);
-    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod: pickWinMethod(winnerTeam) };
+    const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, [...team1, ...team2]) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod };
   };
 
   // Applies a field update to one segment, then re-resolves it (or clears
@@ -2751,7 +2778,7 @@ export default function BookedRingsideEmpire() {
       const idx = prev.findIndex((s) => s.id === id);
       if (idx === -1) return prev;
       const updated = fn(prev[idx]);
-      const withResult = { ...updated, result: isSegmentComplete(updated) ? resolveSegmentResult(updated, idx, prev.length) : null };
+      const withResult = { ...updated, result: isSegmentComplete(updated) ? resolveSegmentResult(updated, idx, prev.length, prev[idx].result) : null };
       const next = [...prev];
       next[idx] = withResult;
       return next;
@@ -2760,7 +2787,7 @@ export default function BookedRingsideEmpire() {
   const addSegment = (format) => setSegments((prev) => [...prev, makeSegment(format)]);
   const removeSegment = (id) => setSegments((prev) => prev.filter((s) => s.id !== id));
   const setSegmentFormat = (id, format) => {
-    updateSegment(id, (s) => ({ ...s, format, angleType: "promo", team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null }));
+    updateSegment(id, (s) => ({ ...s, format, angleType: "promo", team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null, winnerOverride: null, winMethodOverride: null }));
   };
   const setSegmentAngleType = (id, angleType) => {
     // Vignette has no subject — drop one if it was set switching away from
@@ -2771,9 +2798,9 @@ export default function BookedRingsideEmpire() {
   const setSegmentType = (id, type) => {
     updateSegment(id, (s) => {
       if (type === "triple" || type === "fatal4") {
-        return { ...s, type, team1: [s.team1[0], s.team1[1] || null, s.team1[2] || null, s.team1[3] || null], team2: [], titleId: null };
+        return { ...s, type, team1: [s.team1[0], s.team1[1] || null, s.team1[2] || null, s.team1[3] || null], team2: [], titleId: null, winnerOverride: null, winMethodOverride: null };
       }
-      return { ...s, type, team1: [s.team1[0], type === "tag" ? s.team1[1] : null, null, null], team2: [s.team2[0], type === "tag" ? s.team2[1] : null], titleId: null };
+      return { ...s, type, team1: [s.team1[0], type === "tag" ? s.team1[1] : null, null, null], team2: [s.team2[0], type === "tag" ? s.team2[1] : null], titleId: null, winnerOverride: null, winMethodOverride: null };
     });
   };
   const setSegmentMember = (id, side, memberIdx, wrestler) => {
@@ -2785,12 +2812,14 @@ export default function BookedRingsideEmpire() {
         const stable = wrestler ? stableOf(wrestler.name) : null;
         if (stable && !stable.members.includes(team[1].name)) team[1] = null;
       }
-      return { ...s, [side]: team, titleId: null };
+      return { ...s, [side]: team, titleId: null, winnerOverride: null, winMethodOverride: null };
     });
   };
   const setSegmentTitle = (id, titleId) => updateSegment(id, (s) => ({ ...s, titleId }));
   const setSegmentSpecialty = (id, specialtyId) => updateSegment(id, (s) => ({ ...s, specialtyId }));
   const setSegmentMinutes = (id, minutes) => updateSegment(id, (s) => ({ ...s, minutes: clamp(minutes, SEGMENT_MIN_MINUTES, SEGMENT_MAX_MINUTES) }));
+  const setSegmentWinner = (id, name) => updateSegment(id, (s) => ({ ...s, winnerOverride: name }));
+  const setSegmentWinMethod = (id, method) => updateSegment(id, (s) => ({ ...s, winMethodOverride: method }));
 
   // Dark matches resolve the same way a segment does — the moment both
   // sides are filled, roll a winner (for flavor text only; it never touches
@@ -6462,6 +6491,27 @@ export default function BookedRingsideEmpire() {
                             ))}
                           </div>
                           <div className="text-[9px] text-[#8B8593] italic">Everyone's in for themselves — one winner, pinned or submitted by anyone.</div>
+                          {isSegmentComplete(slot) && (
+                            <>
+                              <div className="flex items-start gap-2">
+                                <Trophy size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                                <div className="flex gap-1 flex-wrap">
+                                  <button onClick={() => setSegmentWinner(slot.id, null)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${!slot.winnerOverride ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>Auto</button>
+                                  {slot.team1.filter(Boolean).map((w) => (
+                                    <button key={w.name} onClick={() => setSegmentWinner(slot.id, w.name)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${slot.winnerOverride === w.name ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{w.name}</button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <Flag size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                                <div className="flex gap-1 flex-wrap">
+                                  {[null, "Pinfall", "Submission", "Disqualification", "Countout"].map((m) => (
+                                    <button key={m || "auto"} onClick={() => setSegmentWinMethod(slot.id, m)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(slot.winMethodOverride || null) === m ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{m || "Auto"}</button>
+                                  ))}
+                                </div>
+                              </div>
+                            </>
+                          )}
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
                               <Award size={12} className="text-[#8B6BC0] shrink-0" />
@@ -6547,6 +6597,31 @@ export default function BookedRingsideEmpire() {
                             const penalty = Math.min(25, repeats * 6);
                             const effectivePenalty = isSinglesRivalry ? Math.round(penalty / 2) : penalty;
                             return <div className="text-[9px] text-yellow-400">Booked this exact matchup {repeats}x recently — rating takes a hit (−{effectivePenalty}){isSinglesRivalry ? " (halved, it's an active rivalry)" : ""}.</div>;
+                          })()}
+                          {isSegmentComplete(slot) && (() => {
+                            const t1 = slot.team1.filter(Boolean), t2 = slot.team2.filter(Boolean);
+                            const label1 = t1.map((w) => w.name).join(" & ");
+                            const label2 = t2.map((w) => w.name).join(" & ");
+                            return (
+                              <>
+                                <div className="flex items-start gap-2">
+                                  <Trophy size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                                  <div className="flex gap-1 flex-wrap">
+                                    <button onClick={() => setSegmentWinner(slot.id, null)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${!slot.winnerOverride ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>Auto</button>
+                                    <button onClick={() => setSegmentWinner(slot.id, t1[0].name)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${t1.some((w) => w.name === slot.winnerOverride) ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{label1}</button>
+                                    <button onClick={() => setSegmentWinner(slot.id, t2[0].name)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${t2.some((w) => w.name === slot.winnerOverride) ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{label2}</button>
+                                  </div>
+                                </div>
+                                <div className="flex items-start gap-2">
+                                  <Flag size={12} className="text-[#8B6BC0] shrink-0 mt-1" />
+                                  <div className="flex gap-1 flex-wrap">
+                                    {[null, "Pinfall", "Submission", "Disqualification", "Countout"].map((m) => (
+                                      <button key={m || "auto"} onClick={() => setSegmentWinMethod(slot.id, m)} className={`px-2 py-0.5 rounded text-[9px] font-bold border ${(slot.winMethodOverride || null) === m ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>{m || "Auto"}</button>
+                                    ))}
+                                  </div>
+                                </div>
+                              </>
+                            );
                           })()}
                           {eligibleTitles.length > 0 && (
                             <div className="flex items-center gap-2">
