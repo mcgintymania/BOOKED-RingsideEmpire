@@ -344,6 +344,14 @@ function baseFreelanceFee(w) {
   if (r <= 85) return 2800;
   return 5000;
 }
+// A working agreement makes a partner's exclusive roster bookable as guest
+// talent, but at a mate's-rate loan fee rather than genuinely free — the
+// partner promotion still has to pay that wrestler's own wage regardless of
+// who's using them this week.
+const AGREEMENT_TALENT_FEE_MULT = 0.4;
+function agreementTalentFee(w) {
+  return Math.round(baseFreelanceFee(w) * AGREEMENT_TALENT_FEE_MULT);
+}
 const PER_USE_OFFERS = [
   { key: "low", label: "Low fee", mult: 0.6, refusalChance: 0.6 },
   { key: "medium", label: "Medium fee", mult: 1.0, refusalChance: 0.25 },
@@ -1682,6 +1690,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster, champion, and tag teams.",
       "Freelancers aren't exclusive to anyone — the same wrestler could realistically get booked by a rival the same week you're eyeing them, so they're not always guaranteed available.",
+      "A Working Agreement (available once a rival's within one tier of you) opens up their signed roster as guest talent on your own shows — not free, but a discounted loan fee well below a normal per-use rate. Either side can end it at any time.",
     ],
   },
   {
@@ -1824,7 +1833,8 @@ export default function BookedRingsideEmpire() {
   const [pool, setPool] = useState(buildInitialPool);
   const [rivalCompanies, setRivalCompanies] = useState(() => RIVAL_COMPANIES.map((c, i) => ({ ...c, funds: RIVAL_STARTING_FUNDS[i] ?? 25000, showsRun: 0, lastTier: popularityTier(c.popularity) })));
   // Inter-promotion M&A — working agreements (ids of rivals you've struck a deal
-  // with; their signed talent becomes bookable alongside your own, no fee) and
+  // with; their signed talent becomes bookable alongside your own, at a
+  // discounted loan fee rather than free — see agreementTalentFee) and
   // outright acquisitions (co.acquired: true — AI simulation stops for them,
   // their roster frees up, and they're shown as owned rather than active).
   const [workingAgreements, setWorkingAgreements] = useState([]); // rival company ids
@@ -2046,7 +2056,12 @@ export default function BookedRingsideEmpire() {
   const setNetworkDealEvent = (eventTemplateId) => setNetworkDeal((d) => (d ? { ...d, eventTemplateId: eventTemplateId || null } : d));
   // The template (if any) due this exact week — drives the Book screen's
   // auto-preset and which TV deal (if attached to one) pays out.
-  const activeEventTemplate = eventTemplates.find((t) => t.nextWeekNumber === weekNumber) || null;
+  // <= rather than === — a template whose turn got skipped (two templates due
+  // the same week; only one show runs per week) stays eligible instead of
+  // getting permanently stuck comparing against a weekNumber that's already
+  // moved past it. Sorted most-overdue-first so two colliding weekly shows
+  // take turns over time instead of the same one always winning the tie.
+  const activeEventTemplate = [...eventTemplates].sort((a, b) => a.nextWeekNumber - b.nextWeekNumber).find((t) => t.nextWeekNumber <= weekNumber) || null;
 
   const roster = pool.filter((w) => w.contractedTo === "player");
   const avgRosterOverall = roster.length > 0 ? Math.round(roster.reduce((s, w) => s + attrOf(w), 0) / roster.length) : 0;
@@ -2170,7 +2185,7 @@ export default function BookedRingsideEmpire() {
   const proposeAgreement = (co) => {
     if (!canProposeAgreement(co)) return;
     setWorkingAgreements((ids) => [...ids, co.id]);
-    setUniverseFeed((feed) => [{ id: `wa-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has struck a working agreement with ${co.name} — their signed talent can now be booked as guest appearances, no fee.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
+    setUniverseFeed((feed) => [{ id: `wa-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has struck a working agreement with ${co.name} — their signed talent can now be booked as guest appearances, at a discounted loan fee.`, type: "title", companyId: "player" }, ...feed].slice(0, 300));
   };
   const endAgreement = (co) => {
     setWorkingAgreements((ids) => ids.filter((id) => id !== co.id));
@@ -2825,11 +2840,15 @@ export default function BookedRingsideEmpire() {
     segments.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).filter((w) => w.contractedTo === null).map((w) => w.name)
   );
   const projectedFreelanceCost = bookable.filter((w) => projectedFreelancerNames.has(w.name)).reduce((sum, w) => sum + (w.perUseFee ?? baseFreelanceFee(w)), 0);
+  const projectedAgreementNames = new Set(
+    segments.flatMap((s) => [...s.team1, ...s.team2]).filter(Boolean).filter((w) => workingAgreements.includes(w.contractedTo)).map((w) => w.name)
+  );
+  const projectedAgreementCost = bookable.filter((w) => projectedAgreementNames.has(w.name)).reduce((sum, w) => sum + agreementTalentFee(w), 0);
   const projectedPayroll = roster.reduce((sum, w) => sum + weeklyWage(w), 0);
   // Touring abroad costs real money to actually get there — flights, freight,
   // customs — on top of whatever the venue itself costs.
   const travelSurcharge = FOREIGN_CITIES.includes(city) ? Math.round(arena.cost * FOREIGN_TRAVEL_SURCHARGE_FRAC) : 0;
-  const projectedShowCost = arena.cost + travelSurcharge + activeAdCampaign.cost + projectedSpecialtyCost + projectedFreelanceCost;
+  const projectedShowCost = arena.cost + travelSurcharge + activeAdCampaign.cost + projectedSpecialtyCost + projectedFreelanceCost + projectedAgreementCost;
 
   const cityPop = city ? cityPopularity[city] : popularity;
   // Price always thins the crowd (multiplicative, so it matters at any popularity level),
@@ -2886,7 +2905,15 @@ export default function BookedRingsideEmpire() {
         ...darkMatchResults.flatMap((d) => [d.a, d.b]).filter((w) => w.contractedTo === null).map((w) => w.name),
       ]);
       const freelanceCost = pool.filter((w) => freelancersUsed.has(w.name)).reduce((sum, w) => sum + (w.perUseFee ?? baseFreelanceFee(w)), 0);
-      const wrestlerPay = payroll + freelanceCost;
+      // A working agreement's "free" guest talent still costs a discounted
+      // loan fee per booking — the partner promotion is still paying that
+      // wrestler's own wage regardless of who used them this week.
+      const agreementTalentUsed = new Set([
+        ...matches.flatMap((m) => (m.format === "segment" ? [m.performer, ...(m.subject ? [m.subject] : [])] : [...m.team1, ...m.team2])).filter((w) => workingAgreements.includes(w.contractedTo)).map((w) => w.name),
+        ...darkMatchResults.flatMap((d) => [d.a, d.b]).filter((w) => workingAgreements.includes(w.contractedTo)).map((w) => w.name),
+      ]);
+      const agreementCost = pool.filter((w) => agreementTalentUsed.has(w.name)).reduce((sum, w) => sum + agreementTalentFee(w), 0);
+      const wrestlerPay = payroll + freelanceCost + agreementCost;
       const news = NEWS_EVENTS[rand(0, NEWS_EVENTS.length - 1)];
       const specialtyCost = matches.reduce((s, m) => s + (m.specialty ? m.specialty.cost : 0), 0);
 
@@ -3938,7 +3965,7 @@ export default function BookedRingsideEmpire() {
         return next;
       });
 
-      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, travelSurcharge, adCost: activeAdCampaign.cost, adCampaignLabel: activeAdCampaign.key !== "none" ? activeAdCampaign.label : null, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
+      const record = showRan ? { id: weekNumber, showNumber: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, wasPPV: arena.name === "Major Arena", matches, attendance, revenue, wrestlerPay, specialtyCost, travelSurcharge, adCost: activeAdCampaign.cost, adCampaignLabel: activeAdCampaign.key !== "none" ? activeAdCampaign.label : null, agreementCost, loanPayment, networkIncome, sponsorIncome, merchUnitsSold, merchRevenue, merchMissedUnits, merchTheftUnits, catastrophe: catastropheEntry, underbookedPenaltyNote, profit, news, fullRating, arena: arena.name, ticketPrice, city, showLevel } : null;
       if (record) setShowHistory((h) => [record, ...h].slice(0, 60));
       if (thisShowMatchupKeys.length > 0) {
         setRecentMatchups((prev) => [...thisShowMatchupKeys, ...prev].slice(0, 30));
@@ -3977,9 +4004,12 @@ export default function BookedRingsideEmpire() {
       }
       // Event templates reschedule themselves on their own cadence regardless
       // of whether this week's show actually ran — a weekly slot moves to next
-      // week either way, same as it would in the real world.
+      // week either way, same as it would in the real world. Math.max guards
+      // against a template that had drifted behind (skipped in favor of a
+      // more-overdue one) — always lands strictly in the future from here,
+      // rather than compounding the same backlog forever.
       if (activeEventTemplate) {
-        setEventTemplates((ts) => ts.map((t) => (t.id === activeEventTemplate.id ? { ...t, nextWeekNumber: t.nextWeekNumber + t.intervalWeeks } : t)));
+        setEventTemplates((ts) => ts.map((t) => (t.id === activeEventTemplate.id ? { ...t, nextWeekNumber: Math.max(t.nextWeekNumber + t.intervalWeeks, weekNumber + 1) } : t)));
       }
 
       // Achievement-relevant records from this show — matches array is already
@@ -4289,7 +4319,7 @@ export default function BookedRingsideEmpire() {
   // level and venue — the player still builds and runs the card themselves,
   // this just saves re-picking the same weekly/monthly/PPV setup every time.
   useEffect(() => {
-    const due = eventTemplates.find((t) => t.nextWeekNumber === weekCount);
+    const due = [...eventTemplates].sort((a, b) => a.nextWeekNumber - b.nextWeekNumber).find((t) => t.nextWeekNumber <= weekCount);
     if (due) {
       setShowLevel(due.level);
       setArenaIdx(due.arenaIdx);
@@ -5614,6 +5644,9 @@ export default function BookedRingsideEmpire() {
                   Add
                 </button>
               </div>
+              {eventTemplates.some((t) => t.intervalWeeks === newTemplateIntervalWeeks) && (
+                <div className="text-[9px] text-yellow-400 italic mb-2">Only one show actually runs per week — this will alternate turns with your other same-cadence show rather than both firing every time.</div>
+              )}
               </>
               )}
             </div>
@@ -6060,7 +6093,7 @@ export default function BookedRingsideEmpire() {
                     </button>
                   </div>
                   {workingAgreements.includes(co.id) && (
-                    <div className="text-[9px] text-[#8B8593] italic mt-2">Their signed roster can now be booked as guest talent on your shows, no fee.</div>
+                    <div className="text-[9px] text-[#8B8593] italic mt-2">Their signed roster can now be booked as guest talent on your shows, at a discounted loan fee ({Math.round(AGREEMENT_TALENT_FEE_MULT * 100)}% of a normal per-use fee) rather than free.</div>
                   )}
                 </div>
               )}
@@ -6657,6 +6690,7 @@ export default function BookedRingsideEmpire() {
                     {activeAdCampaign.cost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Advertising</span><span className="font-bold">£{activeAdCampaign.cost.toLocaleString()}</span></div>}
                     {projectedSpecialtyCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Specialty matches</span><span className="font-bold">£{projectedSpecialtyCost.toLocaleString()}</span></div>}
                     {projectedFreelanceCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Freelancer fees</span><span className="font-bold">£{projectedFreelanceCost.toLocaleString()}</span></div>}
+                    {projectedAgreementCost > 0 && <div className="flex justify-between"><span className="text-[#8B8593]">Partner loan fees</span><span className="font-bold">£{projectedAgreementCost.toLocaleString()}</span></div>}
                     <div className="flex justify-between pt-1.5 border-t border-[#2B2733]"><span className="text-[#8B6BC0] font-bold">Show total</span><span className="font-bold text-[#8B6BC0]">£{projectedShowCost.toLocaleString()}</span></div>
                     <div className="flex justify-between text-[#5A5660]"><span>Roster payroll (weekly)</span><span>£{projectedPayroll.toLocaleString()}</span></div>
                     {staffWeeklyPayroll > 0 && <div className="flex justify-between text-[#5A5660]"><span>Staff payroll (weekly)</span><span>£{staffWeeklyPayroll.toLocaleString()}</span></div>}
@@ -6736,6 +6770,7 @@ export default function BookedRingsideEmpire() {
               {showResult.specialtyCost > 0 && <div><span className="text-[#8B8593]">Speciality Costs</span><div className="font-bold">£{showResult.specialtyCost.toLocaleString()}</div></div>}
               {showResult.travelSurcharge > 0 && <div><span className="text-[#8B8593]">Travel Costs</span><div className="font-bold">£{showResult.travelSurcharge.toLocaleString()}</div></div>}
               {showResult.adCost > 0 && <div><span className="text-[#8B8593]">Advertising ({showResult.adCampaignLabel})</span><div className="font-bold">£{showResult.adCost.toLocaleString()}</div></div>}
+              {showResult.agreementCost > 0 && <div><span className="text-[#8B8593]">Partner Loan Fees</span><div className="font-bold">£{showResult.agreementCost.toLocaleString()}</div></div>}
               {showResult.loanPayment > 0 && <div><span className="text-[#8B8593]">Loan Repayment</span><div className="font-bold">£{showResult.loanPayment.toLocaleString()}</div></div>}
               {showResult.networkIncome > 0 && <div><span className="text-[#8B8593]">TV Income</span><div className="font-bold text-[#8B6BC0]">+£{showResult.networkIncome.toLocaleString()}</div></div>}
               {showResult.sponsorIncome > 0 && <div><span className="text-[#8B8593]">Sponsor Income</span><div className="font-bold text-[#8B6BC0]">+£{showResult.sponsorIncome.toLocaleString()}</div></div>}
