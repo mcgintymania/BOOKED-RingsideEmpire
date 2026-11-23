@@ -1777,7 +1777,7 @@ const GUIDE_SECTIONS = [
   {
     key: "promotions", title: "Promotions (Rivals)", icon: Globe2,
     body: [
-      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster, champion, and tag teams.",
+      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, and a funds/popularity trend chart once a few weeks of data exist.",
       "Freelancers aren't exclusive to anyone — the same wrestler could realistically get booked by a rival the same week you're eyeing them, so they're not always guaranteed available.",
       "A Working Agreement (available once a rival's within one tier of you) opens up their signed roster as guest talent on your own shows — not free, but a discounted loan fee well below a normal per-use rate. Either side can end it at any time.",
     ],
@@ -2080,6 +2080,7 @@ export default function BookedRingsideEmpire() {
 
   const [showHistory, setShowHistory] = useState([]);
   const [rivalShowHistory, setRivalShowHistory] = useState([]);
+  const [rivalFinanceHistory, setRivalFinanceHistory] = useState([]); // [{companyId, weekNumber, year, weekOfYear, funds, popularity}]
   // Calendar — player-scheduled reminders, fired by week number. One-off events
   // remove themselves once fired; recurring ones reschedule intervalWeeks ahead.
   const [scheduledEvents, setScheduledEvents] = useState([]); // { id, label, weekNumber, recurring, intervalWeeks }
@@ -3667,6 +3668,12 @@ export default function BookedRingsideEmpire() {
         return { ...co, popularity: newPop, funds: newFunds, showsRun: co.showsRun + 1, lastTier: newTier };
       });
       setRivalCompanies(newRivalCompanies);
+      // One snapshot per company per week — feeds the funds/popularity trend
+      // charts on their profile, same idea as the player's own financeHistory.
+      setRivalFinanceHistory((h) => [
+        ...h,
+        ...newRivalCompanies.filter((co) => !co.acquired).map((co) => ({ companyId: co.id, weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), funds: co.funds, popularity: co.popularity })),
+      ].slice(-1600));
       if (Object.keys(rivalPoolUpdates).length > 0) setPool((p) => p.map((w) => (rivalPoolUpdates[w.name] ? { ...w, ...rivalPoolUpdates[w.name] } : w)));
       if (Object.keys(rivalStaffUpdates).length > 0) setStaffPool((sp) => sp.map((s) => (rivalStaffUpdates[s.id] ? { ...s, ...rivalStaffUpdates[s.id] } : s)));
       const rivalReignCandidates = [];
@@ -4508,6 +4515,7 @@ export default function BookedRingsideEmpire() {
       }),
     })),
     financeHistory: financeHistory.slice(-300),
+    rivalFinanceHistory: rivalFinanceHistory.slice(-1600),
     universeFeed: universeFeed.slice(0, 150),
     storylines, stableStorylines, stables,
     networkDeal, networkOffers, sponsorDeal, sponsorOffers,
@@ -4540,6 +4548,7 @@ export default function BookedRingsideEmpire() {
     // Dates survive JSON as strings, not Date objects — rebuild them so formatDate() still works.
     setShowHistory((s.showHistory || []).map((r) => ({ ...r, date: new Date(r.date) })));
     setFinanceHistory(s.financeHistory || [{ weekNumber: 0, year: 1, weekOfYear: 0, bank: s.bank ?? 20000 }]);
+    setRivalFinanceHistory(s.rivalFinanceHistory || []);
     setUniverseFeed((s.universeFeed || []).map((item) => ({ ...item, date: new Date(item.date) })));
     setStorylines(s.storylines || {}); setStableStorylines(s.stableStorylines || {}); setStables(s.stables || []);
     setNetworkDeal(s.networkDeal || null); setNetworkOffers(s.networkOffers || []);
@@ -4800,6 +4809,7 @@ export default function BookedRingsideEmpire() {
     setTitles([{ id: "world", name: "World Championship", type: "singles", holders: [], reignStartWeek: null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] }]);
     setShowHistory([]);
     setRivalShowHistory([]);
+    setRivalFinanceHistory([]);
     setFinanceHistory([{ weekNumber: 0, year: 1, weekOfYear: 0, bank: 20000 }]);
     setUniverseFeed([]);
     setStorylines({});
@@ -6688,14 +6698,57 @@ export default function BookedRingsideEmpire() {
                   </div>
                 </>
               )}
-              <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">SIGNED ROSTER ({signedRoster.length})</div>
-              <div className="space-y-1 dt:space-y-0 dt:grid dt:grid-cols-3 dt:gap-1.5">
-                {signedRoster.map((w) => (
-                  <div key={w.name} className="flex items-center justify-between text-xs bg-[#131117] rounded px-2 py-1.5">
-                    <span>{w.name}</span>
-                    <span className="text-[#8B8593]">{w.name === champ?.holder && <Award size={11} className="text-[#8B6BC0] inline mr-1" />}OVR {Math.round(attrOf(w))}</span>
+              {(() => {
+                const coFinance = rivalFinanceHistory.filter((h) => h.companyId === co.id).sort((a, b) => a.weekNumber - b.weekNumber);
+                return coFinance.length > 1 ? (
+                  <div className="mb-3">
+                    <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">FUNDS &amp; POPULARITY TREND</div>
+                    <div className="grid dt:grid-cols-2 gap-2">
+                      <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-2" style={{ height: 160 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={coFinance}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#2B2733" />
+                            <XAxis dataKey="weekNumber" stroke="#8B8593" fontSize={9} tick={false} />
+                            <YAxis stroke="#8B8593" fontSize={9} tickFormatter={(v) => `£${Math.round(v / 1000)}k`} width={40} />
+                            <Tooltip contentStyle={{ background: "#131117", border: "1px solid #2B2733", fontSize: 11 }} formatter={(v) => [`£${Math.round(v).toLocaleString()}`, "Funds"]} labelFormatter={(l, p) => (p && p[0] ? `Y${p[0].payload.year} Wk${p[0].payload.weekOfYear}` : "")} />
+                            <Line type="monotone" dataKey="funds" stroke="#C9A227" strokeWidth={2} dot={false} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-2" style={{ height: 160 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={coFinance}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#2B2733" />
+                            <XAxis dataKey="weekNumber" stroke="#8B8593" fontSize={9} tick={false} />
+                            <YAxis stroke="#8B8593" fontSize={9} domain={[0, 100]} width={28} />
+                            <Tooltip contentStyle={{ background: "#131117", border: "1px solid #2B2733", fontSize: 11 }} formatter={(v) => [Math.round(v), "Popularity"]} labelFormatter={(l, p) => (p && p[0] ? `Y${p[0].payload.year} Wk${p[0].payload.weekOfYear}` : "")} />
+                            <Line type="monotone" dataKey="popularity" stroke="#8B6BC0" strokeWidth={2} dot={false} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
                   </div>
-                ))}
+                ) : null;
+              })()}
+
+              <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">SIGNED ROSTER ({signedRoster.length}) BY CARD POSITION</div>
+              <div className="space-y-2 mb-1">
+                {[...TIER_ORDER].reverse().map((t) => {
+                  const inTier = signedRoster.filter((w) => effectiveTier(w) === t);
+                  if (inTier.length === 0) return null;
+                  return (
+                    <div key={t} className="bg-[#131117] rounded-lg p-2">
+                      <div className="text-[9px] text-[#8B8593] font-bold mb-1">{t.toUpperCase()} ({inTier.length})</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {inTier.map((w) => (
+                          <span key={w.name} className="text-[11px] bg-[#17151C] border border-[#2B2733] rounded-full px-2 py-0.5">
+                            {w.name === champ?.holder && <Award size={10} className="text-[#8B6BC0] inline mr-1" />}{w.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
                 {signedRoster.length === 0 && <div className="text-xs text-[#8B8593] italic">No wrestlers signed yet.</div>}
               </div>
 
