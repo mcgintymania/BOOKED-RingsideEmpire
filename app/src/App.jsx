@@ -672,6 +672,15 @@ function tierFromAvg(avg) {
 function effectiveTier(w) {
   return w.pushOverride || w.tier;
 }
+// Roster Color Coder — a quick-glance status accent for a wrestler's card:
+// gold for a champion, red for a fresh injury, orange for one close enough
+// to a return that it reads more like rehab than a real absence. Checked in
+// that order since a champion who's hurt is still worth flagging as hurt.
+function rosterStatusColor(w) {
+  if (w.injuryWeeksRemaining) return w.injuryWeeksRemaining <= 2 ? "#F59E0B" : "#EF4444";
+  if ((w.holdsTitles || []).length > 0) return "#C9A227";
+  return null;
+}
 // The intensity number already existed — this just names what it means, so a
 // feud reads as a story with a shape instead of a bar filling up.
 function feudStage(intensity) {
@@ -1730,6 +1739,7 @@ const GUIDE_SECTIONS = [
       "Injuries can happen after a draining match, sidelining someone 3-52 weeks with a specific injury type (knee, back, concussion, and others) — including champions, who are forced to vacate their title if it happens to them.",
       "Some retirees leave a legacy — a kid who grows up around the business and debuts as a free agent 15-20 years later, carrying the family name. You won't see it happen when it's rolled, only when the kid actually shows up in the News — their Potential is pulled toward how good the parent really was at their peak, not whatever they'd declined to by retirement, so a legendary career can genuinely pay off a generation later.",
       "A wrestler's detail screen can show Traits — tags earned from who they've actually become over their career, not rolled at creation: Fan Favorite (high draw power, and it keeps snowballing), Workhorse (serious ring-time logged), Flight Risk (unhappy right now), Locker Room Leader (happy and experienced), Clutch Performer (a strong win rate plus a title reign — gets a small rating bump specifically in title matches and the Main Event), Rising Star (young with real room left against their Potential), and Second Generation (a legacy debut). Nothing to manage here — they just read as a snapshot of the career so far.",
+      "Roster cards (Roster, Per-Use, and the world Wrestlers browser) carry a colored left edge at a glance: red for a fresh injury, orange once they're down to their last couple weeks out (nearly recovered), gold for a reigning champion.",
     ],
   },
   {
@@ -5770,6 +5780,11 @@ export default function BookedRingsideEmpire() {
 
             {rosterSubTab === "roster" && (
               <div className="space-y-6">
+            <div className="flex items-center gap-3 text-[9px] text-[#8B8593]">
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: "#EF4444" }} /> Injured</span>
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: "#F59E0B" }} /> Nearly recovered</span>
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: "#C9A227" }} /> Champion</span>
+            </div>
             <div>
               <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
                 <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold">EXCLUSIVE ({roster.length})</div>
@@ -5777,8 +5792,10 @@ export default function BookedRingsideEmpire() {
               </div>
               <div className="text-[10px] text-[#8B8593] mb-3">Billed a standing weekly wage, available every show, guaranteed — no per-appearance fee.</div>
               <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
-                {roster.map((w) => (
-                  <div key={w.name} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3">
+                {roster.map((w) => {
+                  const statusColor = rosterStatusColor(w);
+                  return (
+                  <div key={w.name} className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3" style={statusColor ? { borderLeftColor: statusColor, borderLeftWidth: 4 } : undefined}>
                     <div className="flex items-center justify-between mb-1">
                       <button onClick={() => setDetailWrestler(w)} className="font-black text-sm flex items-center gap-1.5 text-left" style={{ fontFamily: "Anton, sans-serif" }}>
                         {w.name}
@@ -5834,7 +5851,8 @@ export default function BookedRingsideEmpire() {
                     })()}
                     <button onClick={() => startExtending(w)} className="mt-2 text-[10px] font-bold text-[#8B6BC0] hover:text-[#F2ECDD]">Extend contract</button>
                   </div>
-                ))}
+                  );
+                })}
                 {roster.length === 0 && <div className="text-xs text-[#8B8593] italic">No wrestlers signed exclusively yet.</div>}
               </div>
             </div>
@@ -5843,8 +5861,10 @@ export default function BookedRingsideEmpire() {
               <div className="text-[11px] tracking-widest text-[#8B8593] font-bold mb-1">PER-USE ({perUseWrestlers.length})</div>
               <div className="text-[10px] text-[#8B8593] mb-3">Your regular freelance picks — stay bookable every week, but cost a fee whenever you actually use them.</div>
               <div className="grid sm:grid-cols-2 dt:grid-cols-3 gap-2">
-                {perUseWrestlers.map((w) => (
-                  <div key={w.name} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
+                {perUseWrestlers.map((w) => {
+                  const statusColor = rosterStatusColor(w);
+                  return (
+                  <div key={w.name} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3" style={statusColor ? { borderLeftColor: statusColor, borderLeftWidth: 4 } : undefined}>
                     <div className="flex items-center justify-between mb-1">
                       <button onClick={() => setDetailWrestler(w)} className="font-black text-sm text-left" style={{ fontFamily: "Anton, sans-serif" }}>{w.name.toUpperCase()}</button>
                       <span onClick={() => removePerUse(w.name)} className="text-[#8B8593] hover:text-[#F2ECDD] p-0.5 cursor-pointer"><X size={14} /></span>
@@ -5852,7 +5872,8 @@ export default function BookedRingsideEmpire() {
                     <div className="text-[10px] text-[#8B6BC0] font-semibold mb-1">OVR {Math.round(attrOf(w))} &middot; {w.sex} &middot; {w.wins}-{w.losses}{w.injuryWeeksRemaining && <span className="text-red-400"> &middot; {w.injuryType ? `${w.injuryType.toUpperCase()} ` : ""}INJURED ({w.injuryWeeksRemaining}wk)</span>}</div>
                     <div className="text-[10px] text-[#8B8593]">£{(w.perUseFee ?? baseFreelanceFee(w)).toLocaleString()}/show when booked</div>
                   </div>
-                ))}
+                  );
+                })}
                 {perUseWrestlers.length === 0 && <div className="text-xs text-[#8B8593] italic">None yet — add freelancers from the Wrestlers tab.</div>}
               </div>
             </div>
@@ -6358,8 +6379,9 @@ export default function BookedRingsideEmpire() {
                 const inRenewalWindow = weeksLeft !== null && weeksLeft >= 0 && weeksLeft <= RENEWAL_WINDOW_WEEKS;
                 const poachableFromRival = !!rival && inRenewalWindow;
                 const inBiddingWar = pendingOffers.some((e) => e.wrestlerName === w.name);
+                const statusColor = rosterStatusColor(w);
                 return (
-                  <div key={w.name} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
+                  <div key={w.name} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3" style={statusColor ? { borderLeftColor: statusColor, borderLeftWidth: 4 } : undefined}>
                     <div className="flex items-center justify-between mb-1 gap-2">
                       <div className="flex items-center gap-1 min-w-0">
                         <button onClick={() => toggleShortlist(w.name)} className={shortlist.includes(w.name) ? "text-yellow-400 shrink-0" : "text-[#8B8593] hover:text-yellow-400 shrink-0"} title={shortlist.includes(w.name) ? "Remove from shortlist" : "Add to shortlist"}>
