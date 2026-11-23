@@ -368,17 +368,53 @@ function rollPerUseOffers(w) {
   return PER_USE_OFFERS.map((o) => ({ ...o, fee: Math.round(base * o.mult * variance) }));
 }
 // Exclusive-contract wage tiers — same spirit as PER_USE_OFFERS, applied to
-// weeklyWage's multiplier instead of a one-off fee.
+// weeklyWage's multiplier instead of a one-off fee. An exclusive offer never
+// resolves instantly (see pendingOffers below) — these just set how
+// competitive yours is once the bidding war actually settles.
 const HIRE_WAGE_OFFERS = [
-  { key: "low", label: "Lowball", mult: 0.8, refusalChance: 0.4 },
-  { key: "standard", label: "Standard", mult: 1.0, refusalChance: 0.18 },
-  { key: "generous", label: "Generous", mult: 1.3, refusalChance: 0.04 },
+  { key: "low", label: "Lowball", mult: 0.8 },
+  { key: "standard", label: "Standard", mult: 1.0 },
+  { key: "generous", label: "Generous", mult: 1.3 },
 ];
-// Any refused direct offer (hire or per-use) has a coin-flip chance of coming
-// back as a named counteroffer instead of a flat no — a real back-and-forth
-// instead of one take-it-or-leave-it roll.
+// A refused per-use offer has a coin-flip chance of coming back as a named
+// counteroffer instead of a flat no — a real back-and-forth instead of one
+// take-it-or-leave-it roll. (Exclusive offers don't use this — see below.)
 const COUNTER_OFFER_CHANCE = 0.5;
 const EXTENSION_REFUSAL_CHANCE = 0.25;
+// Exclusive-contract bidding wars: an offer stays open this many weeks before
+// it settles, giving rivals a real window to notice and jump in — and a deal
+// within this many weeks of expiring is itself poachable, the same way real
+// free agency works. Both resolve on the existing weekly clock rather than a
+// separate day-level one — the game's heartbeat is already a week, and a
+// days clock would mean re-deriving aging, injuries, every contract and title
+// countdown, and the Calendar around it for no behavior this doesn't already
+// get at week granularity.
+const NEGOTIATION_WEEKS = 3;
+const RENEWAL_WINDOW_WEEKS = 4;
+const BIDDING_WAR_JOIN_CHANCE = 0.35;
+const RENEWAL_POACH_CHANCE = 0.12;
+const WALKAWAY_FLOOR = 15;
+// How favorably a wrestler views ONE concrete offer on the table — money,
+// how much room there is to actually grow there, the company's own
+// standing, and whether the length fits their career stage. Every offer in
+// a bidding war (plus a quiet retention offer from wherever they already
+// are, if anyone) is scored with this same formula and the highest wins.
+function offerAppeal(w, offer) {
+  const wageScore = clamp(offer.wageMult, 0.5, 2) * 40;
+  const capIdx = offer.companyTierKey && HIRE_TIER_CAP[offer.companyTierKey] ? TIER_ORDER.indexOf(HIRE_TIER_CAP[offer.companyTierKey]) : TIER_ORDER.length - 1;
+  const headroom = clamp(capIdx - TIER_ORDER.indexOf(w.tier), 0, 5); // room left to be pushed up there
+  const popScore = (offer.companyPopularity / 100) * 30;
+  // A young up-and-comer is wary of locking into a long exclusive deal with
+  // a company that can't do much for them yet; an established veteran
+  // doesn't mind the security of a long one, especially somewhere big.
+  let lengthScore = 0;
+  if (w.age <= 24 && offer.contractWeeks > 26 && offer.companyPopularity < 45) lengthScore -= 25;
+  else if (w.age >= 32 && offer.contractWeeks >= 52) lengthScore += 8;
+  // Content where they already are gives real inertia toward staying;
+  // unhappy makes them that much easier for someone else to pry loose.
+  const happinessBias = offer.companyId === w.contractedTo ? (w.happiness - 50) * 0.3 : 0;
+  return wageScore + headroom * 4 + popScore + lengthScore + happinessBias;
+}
 const WEEKS_PER_YEAR = 52;
 const SCOUT_BASE_REFUSAL = 0.45;
 const SCOUT_CONTRACT_WEEKS = 52;
@@ -1649,12 +1685,13 @@ const GUIDE_SECTIONS = [
   {
     key: "roster", title: "Roster, Wrestlers & Contracts", icon: Users,
     body: [
-      "There are two ways to use a wrestler: sign them Exclusive (a standing weekly wage, guaranteed available, no per-appearance fee) or add them to your Per-Use list (free to add, but you negotiate a fee — Lowball/Standard/Generous offer, cheaper offers are more likely refused — and pay it each time you actually book them). Per-use is cheaper per appearance, but exclusive guarantees you'll never lose access to them. Either kind of offer can also come back as a counteroffer instead of a flat no — accept their number or walk away — and your odds of a yes depend on your own company's reputation as well as their mood: a name right at the top of what you're allowed to approach is always a harder sell than one comfortably within your reach.",
+      "There are two ways to use a wrestler: sign them Exclusive (a standing weekly wage, guaranteed available, no per-appearance fee) or add them to your Per-Use list (free to add, but you negotiate a fee — Low/Medium/High offer, cheaper offers are more likely refused, and a refusal sometimes comes back as a counteroffer to accept or walk away from — then pay it each time you actually book them). Per-use settles on the spot. An Exclusive offer doesn't — it posts to the News and opens a bidding war that settles in a few weeks, giving a rival time to notice and counter-bid with their own money, length, and reputation. The wrestler weighs every offer on the table themselves: money, how much room there is to actually grow at that company, its popularity, and whether the length fits their career stage — a young up-and-comer is wary of a long exclusive deal with a small promotion, a veteran doesn't mind the security.",
+      "A contract within its last few weeks is poachable the same way — if you don't extend it, a rival might already be circling, and whoever makes the better overall case wins them when it actually lapses. Extend early from the Roster tab to settle it outright and shut any brewing interest down.",
       "Star a wrestler from the Wrestlers list to add them to your Shortlist (filter for \"Shortlisted only\" to see just them, whoever they're signed to right now) — a running watchlist for names you're building toward, not just who's available this week. The Wrestlers tab also surfaces a \"Who To Chase Next\" panel of the best free agents currently within your reach.",
       "A wrestler's Overall stat is fixed ability — it never changes from booking decisions. Push (their card status, from Jobber up to Legend) is separate and yours to set for anyone signed to you, exclusive or per-use — a skilled worker can be booked as a jobber, and nobody becomes a Legend just from good stats alone. Same goes for Alignment and renaming: editable for your own people, read-only for anyone signed elsewhere.",
       "Wrestlers age in real time — every 52 weeks, everyone gets a year older. Past 35 there's a real chance of small permanent dips to their physical stats; past 30, experience can show up as a charisma or mic-skill bump instead. A win also has a small chance of a tiny permanent boost tied to how it was won.",
       "Every wrestler also has Draw Power — how much they actually pull a crowd, separate from in-ring ability. It grows from winning, good matches, and title moments, and fades slowly if they're never booked anywhere. Who you put in the Main Event can swing a show's attendance up to ±25%.",
-      "Any offer might get turned down — if refused, they're off-limits to you for 1-3 weeks before you can try again. Releasing an Exclusive wrestler mid-contract also costs a buyout, 50% of their remaining contract wage, shown before you confirm.",
+      "A Per-Use offer might get turned down — if refused outright, they're off-limits to you for 1-3 weeks before you can try again. Releasing an Exclusive wrestler mid-contract also costs a buyout, 50% of their remaining contract wage, shown before you confirm.",
       "Wrestlers have Energy (drains with use, recovers when rested — low energy hurts both their win chance and the match rating, but never permanently affects their Overall) and Happiness (affected by requests you promise and then fulfil, break, or decline, plus wins, losses, injuries, and title changes). Watch the Requests tab under Roster for what your talent is asking for.",
       "Injuries can happen after a draining match, sidelining someone 3-52 weeks with a specific injury type (knee, back, concussion, and others) — including champions, who are forced to vacate their title if it happens to them.",
       "Some retirees leave a legacy — a kid who grows up around the business and debuts as a free agent 15-20 years later, carrying the family name. You won't see it happen when it's rolled, only when the kid actually shows up in the News — their Potential is pulled toward how good the parent really was at their peak, not whatever they'd declined to by retirement, so a legendary career can genuinely pay off a generation later.",
@@ -1893,8 +1930,6 @@ export default function BookedRingsideEmpire() {
   const [hireWeeks, setHireWeeks] = useState(26);
   const [hireLevel, setHireLevel] = useState("main");
   const [hireWageKey, setHireWageKey] = useState("standard");
-  const [hireCounter, setHireCounter] = useState(null);
-  const [hireResult, setHireResult] = useState(null);
   const [scoutingTarget, setScoutingTarget] = useState(null);
   const [scoutResult, setScoutResult] = useState(null);
   const [extendingTarget, setExtendingTarget] = useState(null);
@@ -1905,6 +1940,10 @@ export default function BookedRingsideEmpire() {
   const [financeYear, setFinanceYear] = useState(1);
   const [perUseRoster, setPerUseRoster] = useState([]);
   const [shortlist, setShortlist] = useState([]);
+  // Open exclusive-contract bidding wars: { id, wrestlerName, resolveWeek,
+  // offers: [{ companyId, wageMult, contractWeeks, level? }] }. See
+  // NEGOTIATION_WEEKS/RENEWAL_WINDOW_WEEKS and offerAppeal above.
+  const [pendingOffers, setPendingOffers] = useState([]);
   const [sortField, setSortField] = useState("overall");
   const [rankingsFilter, setRankingsFilter] = useState("all");
   const [rankingsMode, setRankingsMode] = useState("singles");
@@ -2118,7 +2157,7 @@ export default function BookedRingsideEmpire() {
 
   const hireTierCap = HIRE_TIER_CAP[popularityTier(popularity)];
   const exceedsHireCap = (w) => hireTierCap != null && TIER_ORDER.indexOf(w.tier) > TIER_ORDER.indexOf(hireTierCap);
-  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireLevel("main"); setHireWageKey("standard"); setHireCounter(null); setHireResult(null); };
+  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireLevel("main"); setHireWageKey("standard"); };
   const happinessRefusalAdj = (w) => {
     if (w.happiness < 20) return 0.3;
     if (w.happiness < 40) return 0.15;
@@ -2137,38 +2176,29 @@ export default function BookedRingsideEmpire() {
     return clamp(0.12 - edge * 0.04, -0.06, 0.12);
   };
 
-  const finalizeHire = (mult) => {
-    if (!hiringTarget) return;
-    const signedLevel = hireLevel === "developmental" && feederCompany ? "developmental" : "main";
-    setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, contractedTo: "player", contractExpiresWeek: weekNumber + hireWeeks, rosterLevel: signedLevel, wageMultiplier: mult } : w)));
-    setPerUseRoster((pu) => pu.filter((n) => n !== hiringTarget.name));
-    setUniverseFeed((feed) => [{ id: `h-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has signed ${hiringTarget.name} to an exclusive contract${signedLevel === "developmental" ? " (Developmental)" : ""}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
-    setHireResult("accepted");
-  };
+  // An exclusive offer never resolves on the spot — it opens (or joins) a
+  // bidding war that settles on its own in NEGOTIATION_WEEKS (see the weekly
+  // tick in runShow), giving rivals time to notice and counter-bid, and the
+  // wrestler themself a real choice between whatever's on the table when the
+  // window closes (offerAppeal, above).
   const confirmHire = () => {
     if (!hiringTarget || exceedsHireCap(hiringTarget)) return;
     const offer = HIRE_WAGE_OFFERS.find((o) => o.key === hireWageKey);
-    const refused = Math.random() < clamp(offer.refusalChance + happinessRefusalAdj(hiringTarget) + reputationRefusalAdj(hiringTarget), 0.02, 0.9);
-    if (refused) {
-      if (Math.random() < COUNTER_OFFER_CHANCE) {
-        const counterMult = Math.round(offer.mult * (1.15 + Math.random() * 0.2) * 100) / 100;
-        setHireCounter({ mult: counterMult });
-        setHireResult("countered");
-        return;
+    const signedLevel = hireLevel === "developmental" && feederCompany ? "developmental" : "main";
+    const myOffer = { companyId: "player", wageMult: offer.mult, contractWeeks: hireWeeks, level: signedLevel };
+    const isNewApproach = !pendingOffers.some((e) => e.wrestlerName === hiringTarget.name);
+    setPendingOffers((po) => {
+      const idx = po.findIndex((e) => e.wrestlerName === hiringTarget.name);
+      if (idx === -1) {
+        return [...po, { id: `po-${hiringTarget.name}-${weekNumber}-${Date.now()}`, wrestlerName: hiringTarget.name, resolveWeek: weekNumber + NEGOTIATION_WEEKS, offers: [myOffer] }];
       }
-      const cooldownWeeks = rand(1, 3);
-      setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, hireCooldownUntil: weekNumber + cooldownWeeks } : w)));
-      setHireResult("refused");
-      return;
+      const next = [...po];
+      next[idx] = { ...next[idx], offers: [...next[idx].offers.filter((o) => o.companyId !== "player"), myOffer] };
+      return next;
+    });
+    if (isNewApproach) {
+      setUniverseFeed((feed) => [{ id: `appr-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has made an approach to sign ${hiringTarget.name}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
     }
-    finalizeHire(offer.mult);
-  };
-  const acceptHireCounter = () => { if (hireCounter) finalizeHire(hireCounter.mult); };
-  const walkAwayFromHireCounter = () => {
-    if (!hiringTarget) return;
-    const cooldownWeeks = rand(1, 3);
-    setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, hireCooldownUntil: weekNumber + cooldownWeeks } : w)));
-    setHireResult("refused");
   };
   const buyoutCost = (w) => {
     const remainingWeeks = Math.max(0, (w.contractExpiresWeek || weekNumber) - weekNumber);
@@ -2179,6 +2209,7 @@ export default function BookedRingsideEmpire() {
     setBank((b) => b - cost);
     if (cost > 0) setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - cost }]);
     setPool((p) => p.map((x) => (x.name === w.name ? { ...x, contractedTo: null, contractExpiresWeek: null } : x)));
+    setPendingOffers((po) => po.filter((e) => e.wrestlerName !== w.name));
   };
 
   // Scouting — poach a young or undersized prospect straight off a rival's
@@ -2207,6 +2238,7 @@ export default function BookedRingsideEmpire() {
     setBank((b) => b - cost);
     setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - cost }]);
     setPool((p) => p.map((w) => (w.name === scoutingTarget.name ? { ...w, contractedTo: "player", contractExpiresWeek: weekNumber + SCOUT_CONTRACT_WEEKS, rosterLevel: "developmental", hireCooldownUntil: null } : w)));
+    setPendingOffers((po) => po.filter((e) => e.wrestlerName !== scoutingTarget.name));
     setUniverseFeed((feed) => [{ id: `scout-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has scouted ${scoutingTarget.name} away from ${rivalName} for their developmental system.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
     setScoutResult("accepted");
   };
@@ -2274,6 +2306,7 @@ export default function BookedRingsideEmpire() {
     setPerUseRoster((pu) => pu.filter((n) => n !== name));
     setTitles((ts) => ts.map((t) => (t.holders.includes(name) ? { ...t, holders: t.holders.filter((h) => h !== name) } : t)));
     setRivalTitles((ts) => ts.map((t) => (t.holder === name ? { ...t, holder: null } : t)));
+    setPendingOffers((po) => po.filter((e) => e.wrestlerName !== name));
   };
   const saveWrestlerDraft = () => {
     const d = editingWrestlerDraft;
@@ -2296,6 +2329,8 @@ export default function BookedRingsideEmpire() {
         setPerUseRoster((pu) => pu.map((n) => (n === d._originalName ? name : n)));
         setTitles((ts) => ts.map((t) => ({ ...t, holders: t.holders.map((h) => (h === d._originalName ? name : h)) })));
         setRivalTitles((ts) => ts.map((t) => (t.holder === d._originalName ? { ...t, holder: name } : t)));
+        setPendingOffers((po) => po.map((e) => (e.wrestlerName === d._originalName ? { ...e, wrestlerName: name } : e)));
+        setShortlist((sl) => sl.map((n) => (n === d._originalName ? name : n)));
       }
     }
     setEditingWrestlerDraft(null);
@@ -2451,12 +2486,15 @@ export default function BookedRingsideEmpire() {
   const startExtending = (w) => { setExtendingTarget(w); setExtendWeeks(26); setExtendResult(null); };
   const confirmExtend = () => {
     if (!extendingTarget) return;
-    const refused = Math.random() < clamp(EXTENSION_REFUSAL_CHANCE + happinessRefusalAdj(extendingTarget), 0.02, 0.9);
+    const refused = Math.random() < clamp(EXTENSION_REFUSAL_CHANCE + happinessRefusalAdj(extendingTarget) + reputationRefusalAdj(extendingTarget), 0.02, 0.9);
     if (refused) {
       setExtendResult("refused");
       return;
     }
     setPool((p) => p.map((w) => (w.name === extendingTarget.name ? { ...w, contractExpiresWeek: Math.max(w.contractExpiresWeek, weekNumber) + extendWeeks } : w)));
+    // A fresh extension settles "stay or go" on the spot — any bidding war
+    // already brewing over their old expiry date is moot now.
+    setPendingOffers((po) => po.filter((e) => e.wrestlerName !== extendingTarget.name));
     setExtendResult("accepted");
   };
 
@@ -3501,6 +3539,95 @@ export default function BookedRingsideEmpire() {
         setUniverseFeed((feed) => [...rivalNewsEntries.map((e, i) => ({ id: `rv-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "rival", companyId: e.companyId })), ...feed].slice(0, 300));
       }
 
+      // --- Exclusive-contract bidding wars --------------------------------
+      // An open war can pick up extra bidders, a contract nearing expiry can
+      // turn into a brand new one, and anything whose window has closed
+      // gets settled — all on this same weekly tick, same as everything
+      // else above. See NEGOTIATION_WEEKS/RENEWAL_WINDOW_WEEKS/offerAppeal.
+      {
+        const biddingNewsEntries = [];
+        let nextPendingOffers = pendingOffers;
+
+        // 1) A bidder may notice an already-open war and jump in — bigger
+        //    names draw more outside interest.
+        nextPendingOffers = nextPendingOffers.map((entry) => {
+          if (weekNumber >= entry.resolveWeek) return entry; // resolving below, leave it alone here
+          const w = pool.find((p) => p.name === entry.wrestlerName);
+          if (!w) return entry;
+          const biddingCompanies = new Set(entry.offers.map((o) => o.companyId));
+          const eligibleRivals = rivalCompanies.filter((co) => !co.acquired && !biddingCompanies.has(co.id) && co.id !== w.contractedTo);
+          if (eligibleRivals.length === 0 || Math.random() >= BIDDING_WAR_JOIN_CHANCE * (attrOf(w) / 100)) return entry;
+          const co = eligibleRivals[rand(0, eligibleRivals.length - 1)];
+          biddingNewsEntries.push({ text: `${co.name} has entered the bidding to sign ${w.name}.`, companyId: co.id });
+          return { ...entry, offers: [...entry.offers, { companyId: co.id, wageMult: 0.9 + Math.random() * 0.5, contractWeeks: rand(26, 78) }] };
+        });
+
+        // 2) Contracts entering their last RENEWAL_WINDOW_WEEKS become
+        //    poachable — a rival quietly lines up an offer that only matters
+        //    if nobody re-signs them before the current deal actually lapses.
+        pool.forEach((w) => {
+          if (w.contractedTo === null || !w.contractExpiresWeek) return;
+          const weeksLeft = w.contractExpiresWeek - weekNumber;
+          if (weeksLeft < 0 || weeksLeft > RENEWAL_WINDOW_WEEKS) return;
+          if (nextPendingOffers.some((e) => e.wrestlerName === w.name)) return;
+          const eligibleRivals = rivalCompanies.filter((co) => !co.acquired && co.id !== w.contractedTo);
+          if (eligibleRivals.length === 0 || Math.random() >= RENEWAL_POACH_CHANCE) return;
+          const co = eligibleRivals[rand(0, eligibleRivals.length - 1)];
+          const incumbentName = w.contractedTo === "player" ? companyName : (rivalCompanies.find((c) => c.id === w.contractedTo)?.name || "their current promotion");
+          biddingNewsEntries.push({ text: `${co.name} has been linked with a move for ${w.name} as their contract with ${incumbentName} winds down.`, companyId: co.id });
+          nextPendingOffers = [...nextPendingOffers, { id: `po-${w.name}-${weekNumber}-${Date.now()}-${Math.round(Math.random() * 1e6)}`, wrestlerName: w.name, resolveWeek: w.contractExpiresWeek, offers: [{ companyId: co.id, wageMult: 0.9 + Math.random() * 0.5, contractWeeks: rand(26, 78) }] }];
+        });
+
+        // 3) Settle anything whose window has closed.
+        const offerPoolUpdates = {};
+        const perUseDrops = [];
+        const stillPending = [];
+        nextPendingOffers.forEach((entry) => {
+          if (weekNumber < entry.resolveWeek) { stillPending.push(entry); return; }
+          const w = pool.find((p) => p.name === entry.wrestlerName);
+          if (!w) return; // released/deleted mid-negotiation — just drop it
+          const incumbentId = w.contractedTo;
+          const offers = [...entry.offers];
+          // An incumbent who never explicitly re-offered still gets a quiet
+          // standing-pat retention option — a contract doesn't just lapse
+          // unnoticed by default.
+          if (incumbentId && !offers.some((o) => o.companyId === incumbentId)) {
+            offers.push({ companyId: incumbentId, wageMult: w.wageMultiplier || 1, contractWeeks: 26 });
+          }
+          const scored = offers.map((o) => {
+            const companyPopularity = o.companyId === "player" ? popularity : (rivalCompanies.find((c) => c.id === o.companyId)?.popularity ?? 10);
+            const companyTierKey = o.companyId === "player" ? popularityTier(popularity) : (rivalCompanies.find((c) => c.id === o.companyId)?.lastTier ?? "Unknown");
+            return { ...o, companyPopularity, companyTierKey, score: offerAppeal(w, { ...o, companyId: o.companyId, companyPopularity, companyTierKey }) };
+          });
+          scored.sort((a, b) => b.score - a.score);
+          const best = scored[0];
+          if (!best || best.score < WALKAWAY_FLOOR) {
+            if (incumbentId) {
+              offerPoolUpdates[w.name] = { contractedTo: null, contractExpiresWeek: null };
+              biddingNewsEntries.push({ text: `${w.name}'s contract has expired and they've walked away as a free agent.`, companyId: incumbentId === "player" ? "player" : incumbentId });
+            }
+            return;
+          }
+          offerPoolUpdates[w.name] = { contractedTo: best.companyId, contractExpiresWeek: weekNumber + best.contractWeeks, wageMultiplier: best.wageMult, rosterLevel: best.level || w.rosterLevel || "main" };
+          if (best.companyId === "player") perUseDrops.push(w.name);
+          if (incumbentId && best.companyId !== incumbentId) {
+            const fromName = incumbentId === "player" ? companyName : (rivalCompanies.find((c) => c.id === incumbentId)?.name || "their old promotion");
+            const toName = best.companyId === "player" ? companyName : (rivalCompanies.find((c) => c.id === best.companyId)?.name || "a rival promotion");
+            biddingNewsEntries.push({ text: `${w.name} has snubbed ${fromName} to sign with ${toName}${scored.length > 2 ? " after a bidding war" : ""}.`, companyId: best.companyId === "player" ? "player" : best.companyId });
+          } else if (!incumbentId) {
+            const toName = best.companyId === "player" ? companyName : (rivalCompanies.find((c) => c.id === best.companyId)?.name || "a rival promotion");
+            biddingNewsEntries.push({ text: `${w.name} has signed with ${toName}${scored.length > 1 ? " after a bidding war" : ""}.`, companyId: best.companyId === "player" ? "player" : best.companyId });
+          }
+          // else: the incumbent retained them quietly — business as usual, no news needed.
+        });
+        if (Object.keys(offerPoolUpdates).length > 0) setPool((p) => p.map((w) => (offerPoolUpdates[w.name] ? { ...w, ...offerPoolUpdates[w.name] } : w)));
+        if (perUseDrops.length > 0) setPerUseRoster((pu) => pu.filter((n) => !perUseDrops.includes(n)));
+        setPendingOffers(stillPending);
+        if (biddingNewsEntries.length > 0) {
+          setUniverseFeed((feed) => [...biddingNewsEntries.map((e, i) => ({ id: `bid-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: e.text, type: "rival", companyId: e.companyId })), ...feed].slice(0, 300));
+        }
+      }
+
       // Clear deals once they lapse, and occasionally roll fresh offers when you're not under contract.
       if (networkDeal && weekNumber >= networkDeal.expiresWeek) setNetworkDeal(null);
       if (sponsorDeal && weekNumber >= sponsorDeal.expiresWeek) setSponsorDeal(null);
@@ -4150,11 +4277,16 @@ export default function BookedRingsideEmpire() {
     }, 1200);
   };
 
+  // "Book another show" clearing the card for a fresh one — city is NOT
+  // reset here: the [weekCount] effect above already set it correctly for
+  // whichever show is now due the moment the week advanced, and nulling it
+  // again here left nothing to ever set it back (that effect only reruns on
+  // the NEXT weekCount change), permanently disabling RUN THE SHOW until the
+  // game was reloaded.
   const resetShow = () => {
     setSegments([]);
     setDarkMatches([]);
     setShowResult(null);
-    setCity(null);
   };
 
   const buildSaveSnapshot = () => ({
@@ -4191,7 +4323,7 @@ export default function BookedRingsideEmpire() {
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
     scheduledEvents, eventTemplates, workingAgreements, feederCompany,
-    staffPool, productionTier, fanTrendKey, shortlist,
+    staffPool, productionTier, fanTrendKey, shortlist, pendingOffers,
   });
 
   const applySaveSnapshot = (s) => {
@@ -4239,6 +4371,7 @@ export default function BookedRingsideEmpire() {
     setFanTrendKey(s.fanTrendKey || FAN_TRENDS[0].key);
     setStaffPool(s.staffPool || buildStaffPool());
     setShortlist(s.shortlist || []);
+    setPendingOffers(s.pendingOffers || []);
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setDarkMatches([]);
@@ -5377,6 +5510,16 @@ export default function BookedRingsideEmpire() {
                       {w.injuryWeeksRemaining && <span className="text-red-400"> &middot; {w.injuryType ? `${w.injuryType.toUpperCase()} ` : ""}INJURED ({w.injuryWeeksRemaining}wk)</span>}
                     </div>
                     <div className="text-[10px] text-[#8B8593]">£{weeklyWage(w).toLocaleString()}/wk &middot; {w.contractExpiresWeek - weekNumber}wk left</div>
+                    {w.contractExpiresWeek - weekNumber <= RENEWAL_WINDOW_WEEKS && (() => {
+                      const entry = pendingOffers.find((e) => e.wrestlerName === w.name);
+                      const rivalBidder = entry?.offers.find((o) => o.companyId !== "player");
+                      const rivalName = rivalBidder ? (RIVAL_COMPANIES.find((c) => c.id === rivalBidder.companyId)?.name || "A rival") : null;
+                      return (
+                        <div className="text-[9px] text-yellow-400 mt-1">
+                          Contract expiring soon{rivalName ? ` — ${rivalName} is already circling` : " — extend now or risk losing them to a rival"}.
+                        </div>
+                      );
+                    })()}
                     <div className="flex items-center gap-1.5 mt-2">
                       <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${(w.rosterLevel || "main") === "main" ? "bg-[#5B3B8C] text-[#F2ECDD]" : "bg-[#241B33] text-[#8B6BC0]"}`}>
                         {(w.rosterLevel || "main") === "main" ? "MAIN ROSTER" : "DEVELOPMENTAL"}
@@ -5930,6 +6073,10 @@ export default function BookedRingsideEmpire() {
                 const isPlayerSigned = w.contractedTo === "player";
                 const isPerUse = perUseRoster.includes(w.name);
                 const onCooldown = w.hireCooldownUntil && weekNumber < w.hireCooldownUntil;
+                const weeksLeft = w.contractExpiresWeek != null ? w.contractExpiresWeek - weekNumber : null;
+                const inRenewalWindow = weeksLeft !== null && weeksLeft >= 0 && weeksLeft <= RENEWAL_WINDOW_WEEKS;
+                const poachableFromRival = !!rival && inRenewalWindow;
+                const inBiddingWar = pendingOffers.some((e) => e.wrestlerName === w.name);
                 return (
                   <div key={w.name} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
                     <div className="flex items-center justify-between mb-1 gap-2">
@@ -5939,15 +6086,15 @@ export default function BookedRingsideEmpire() {
                         </button>
                         <button onClick={() => setDetailWrestler(w)} className="font-black text-sm text-left hover:text-[#8B6BC0] transition-colors truncate" style={{ fontFamily: "Anton, sans-serif" }}>{w.name.toUpperCase()}</button>
                       </div>
-                      {!rival && !isPlayerSigned && !onCooldown && (
+                      {(!rival || poachableFromRival) && !isPlayerSigned && !onCooldown && (
                         <div className="flex gap-1 shrink-0">
-                          {!isPerUse && (
+                          {!isPerUse && !rival && (
                             <button onClick={() => startNegotiating(w)} className="text-[10px] font-bold px-2 py-1 rounded border border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#241B33]">Per Use</button>
                           )}
                           {exceedsHireCap(w) ? (
                             <span className="text-[9px] text-[#8B8593] italic px-1 self-center" title={`Too big a name to sign exclusively at ${popularityTier(popularity)} level`}>Above your level</span>
                           ) : (
-                            <button onClick={() => startHiring(w)} className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-[#5B3B8C] hover:bg-[#6C47A3]"><Plus size={11} /> Exclusive</button>
+                            <button onClick={() => startHiring(w)} className="flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-[#5B3B8C] hover:bg-[#6C47A3]"><Plus size={11} /> {rival ? "Bid" : "Exclusive"}</button>
                           )}
                         </div>
                       )}
@@ -5958,8 +6105,9 @@ export default function BookedRingsideEmpire() {
                     </div>
                     <div className="text-[10px] font-semibold flex items-center gap-1 flex-wrap">
                       <span className="text-[#8B6BC0]">OVR {Math.round(attrOf(w))} &middot; {w.sex} &middot; {w.wins}-{w.losses}</span>{w.injuryWeeksRemaining && <span className="text-red-400 text-[9px]"> &middot; INJURED</span>}
-                      {rival ? <span className="text-[9px] text-[#8B8593]">&middot; Signed: {rival.name}</span> : isPlayerSigned ? <span className="text-[9px] text-[#8B8593]">&middot; Exclusive to you</span> : isPerUse ? <span className="text-[9px] text-[#8B8593]">&middot; Per-use (yours)</span> : <span className="text-[9px] text-[#8B8593]">&middot; Freelance</span>}
+                      {rival ? <span className="text-[9px] text-[#8B8593]">&middot; Signed: {rival.name}{inRenewalWindow ? ` (exp ${weeksLeft}wk)` : ""}</span> : isPlayerSigned ? <span className="text-[9px] text-[#8B8593]">&middot; Exclusive to you{inRenewalWindow ? ` (exp ${weeksLeft}wk)` : ""}</span> : isPerUse ? <span className="text-[9px] text-[#8B8593]">&middot; Per-use (yours)</span> : <span className="text-[9px] text-[#8B8593]">&middot; Freelance</span>}
                       {rival && isScoutProspect(w) && <span className="text-[9px] text-[#8B6BC0] italic">&middot; Prospect</span>}
+                      {inBiddingWar && <span className="text-[9px] text-yellow-400 italic">&middot; Bidding war</span>}
                     </div>
                   </div>
                 );
@@ -5969,64 +6117,64 @@ export default function BookedRingsideEmpire() {
               )}
             </div>
 
-            {hiringTarget && (
-              <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setHiringTarget(null)}>
-                <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
-                  <div className="text-lg font-black mb-1" style={{ fontFamily: "Anton, sans-serif" }}>SIGN {hiringTarget.name.toUpperCase()}</div>
-                  <div className="text-[10px] text-[#8B8593] mb-3">Weekly wage is billed automatically while under contract. A lowball offer is cheaper but more likely to be turned down — a refusal sometimes comes back as a counteroffer instead of a flat no.</div>
-                  {hireResult === "refused" && <div className="text-xs text-red-400 mb-3">{hiringTarget.name} turned down the offer. Try again in a few weeks.</div>}
-                  {hireResult === "accepted" && <div className="text-xs text-[#8B6BC0] mb-3">Signed!</div>}
-                  {hireResult === "countered" && hireCounter && (
-                    <div className="text-xs text-[#8B6BC0] mb-3">
-                      {hiringTarget.name} turned that down, but says they'd sign for £{Math.round(weeklyWage(hiringTarget) * hireCounter.mult).toLocaleString()}/week instead.
-                      <div className="flex gap-2 mt-2">
-                        <button onClick={acceptHireCounter} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded text-[#F2ECDD]">Accept</button>
-                        <button onClick={walkAwayFromHireCounter} className="flex-1 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Walk Away</button>
+            {hiringTarget && (() => {
+              const entry = pendingOffers.find((e) => e.wrestlerName === hiringTarget.name);
+              const myOffer = entry?.offers.find((o) => o.companyId === "player");
+              const rivalBidderNames = (entry?.offers || []).filter((o) => o.companyId !== "player").map((o) => rivalCompanies.find((c) => c.id === o.companyId)?.name || "a rival promotion");
+              const weeksLeft = entry ? Math.max(0, entry.resolveWeek - weekNumber) : null;
+              return (
+                <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setHiringTarget(null)}>
+                  <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
+                    <div className="text-lg font-black mb-1" style={{ fontFamily: "Anton, sans-serif" }}>SIGN {hiringTarget.name.toUpperCase()}</div>
+                    <div className="text-[10px] text-[#8B8593] mb-3">An offer opens a bidding war rather than resolving on the spot — it settles in {NEGOTIATION_WEEKS} weeks, time enough for a rival to notice and counter-bid. They'll weigh every offer on the table (money, room to grow, your reputation, contract length) and pick whichever suits them best. Weekly wage is billed automatically once signed.</div>
+                    {entry && (
+                      <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-2.5 mb-3 text-xs">
+                        <div className="text-[#8B6BC0] font-bold mb-1">Bidding war in progress &middot; settles in {weeksLeft} week{weeksLeft === 1 ? "" : "s"}</div>
+                        {myOffer && <div className="text-[#8B8593]">Your offer: £{Math.round(weeklyWage(hiringTarget) * myOffer.wageMult).toLocaleString()}/wk &middot; {myOffer.contractWeeks} weeks</div>}
+                        <div className={rivalBidderNames.length > 0 ? "text-yellow-400 mt-1" : "text-[#8B8593] mt-1"}>
+                          {rivalBidderNames.length > 0 ? `Also bidding: ${rivalBidderNames.join(", ")}` : "No other bidders yet."}
+                        </div>
                       </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      {CONTRACT_OPTIONS.map((wk) => (
+                        <button key={wk} onClick={() => setHireWeeks(wk)} className={`px-3 py-2 rounded text-xs font-bold border ${hireWeeks === wk ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={hireWeeks === wk ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
+                          {wk} weeks
+                        </button>
+                      ))}
                     </div>
-                  )}
-                  {!hireResult && (
-                    <>
-                      <div className="grid grid-cols-2 gap-2 mb-3">
-                        {CONTRACT_OPTIONS.map((wk) => (
-                          <button key={wk} onClick={() => setHireWeeks(wk)} className={`px-3 py-2 rounded text-xs font-bold border ${hireWeeks === wk ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={hireWeeks === wk ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
-                            {wk} weeks
+                    <div className="text-[9px] text-[#8B8593] mb-1">WAGE OFFER</div>
+                    <div className="space-y-2 mb-3">
+                      {HIRE_WAGE_OFFERS.map((o) => (
+                        <button key={o.key} onClick={() => setHireWageKey(o.key)} className={`w-full flex items-center justify-between px-3 py-2 rounded border text-left ${hireWageKey === o.key ? "border-[#5B3B8C] bg-[#241B33]" : "border-[#2B2733] hover:border-[#5B3B8C]"}`}>
+                          <span className="text-xs font-bold">{o.label}</span>
+                          <span className="text-[10px] text-[#8B8593]">£{Math.round(weeklyWage(hiringTarget) * o.mult).toLocaleString()}/wk</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="text-[9px] text-[#8B8593] mb-1">SIGN TO</div>
+                    <div className="flex gap-2 mb-4">
+                      {["main", "developmental"].map((lvl) => {
+                        const devLocked = lvl === "developmental" && !feederCompany;
+                        return (
+                          <button
+                            key={lvl}
+                            disabled={devLocked}
+                            onClick={() => { if (!devLocked) setHireLevel(lvl); }}
+                            title={devLocked ? "Found a feeder promotion from Back Office first" : undefined}
+                            className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold border ${devLocked ? "text-[#5A5660] border-[#2B2733] cursor-not-allowed" : hireLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}
+                          >
+                            {lvl === "main" ? "Main Roster" : "Developmental"}
                           </button>
-                        ))}
-                      </div>
-                      <div className="text-[9px] text-[#8B8593] mb-1">WAGE OFFER</div>
-                      <div className="space-y-2 mb-3">
-                        {HIRE_WAGE_OFFERS.map((o) => (
-                          <button key={o.key} onClick={() => setHireWageKey(o.key)} className={`w-full flex items-center justify-between px-3 py-2 rounded border text-left ${hireWageKey === o.key ? "border-[#5B3B8C] bg-[#241B33]" : "border-[#2B2733] hover:border-[#5B3B8C]"}`}>
-                            <span className="text-xs font-bold">{o.label}</span>
-                            <span className="text-[10px] text-[#8B8593]">£{Math.round(weeklyWage(hiringTarget) * o.mult).toLocaleString()}/wk &middot; {Math.round(o.refusalChance * 100)}% refuse</span>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="text-[9px] text-[#8B8593] mb-1">SIGN TO</div>
-                      <div className="flex gap-2 mb-4">
-                        {["main", "developmental"].map((lvl) => {
-                          const devLocked = lvl === "developmental" && !feederCompany;
-                          return (
-                            <button
-                              key={lvl}
-                              disabled={devLocked}
-                              onClick={() => { if (!devLocked) setHireLevel(lvl); }}
-                              title={devLocked ? "Found a feeder promotion from Back Office first" : undefined}
-                              className={`flex-1 px-3 py-1.5 rounded text-[11px] font-bold border ${devLocked ? "text-[#5A5660] border-[#2B2733] cursor-not-allowed" : hireLevel === lvl ? "bg-[#5B3B8C] border-[#5B3B8C] text-[#F2ECDD]" : "border-[#2B2733] text-[#8B8593]"}`}
-                            >
-                              {lvl === "main" ? "Main Roster" : "Developmental"}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <button onClick={confirmHire} className="w-full py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded">Offer contract</button>
-                    </>
-                  )}
-                  <button onClick={() => setHiringTarget(null)} className="w-full mt-2 px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Close</button>
+                        );
+                      })}
+                    </div>
+                    <button onClick={confirmHire} className="w-full py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded">{entry ? "Raise Your Offer" : "Make An Offer"}</button>
+                    <button onClick={() => setHiringTarget(null)} className="w-full mt-2 px-4 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Close</button>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {scoutingTarget && (
               <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setScoutingTarget(null)}>
