@@ -1882,6 +1882,12 @@ export default function BookedRingsideEmpire() {
   const [saveInfo, setSaveInfo] = useState(undefined);
   const [autoSaveInfo, setAutoSaveInfo] = useState(undefined);
   const [retiring, setRetiring] = useState(false);
+  // Landing screen shown before any save is actually loaded into live state —
+  // "menu" so Continue/Load/New Game/World Editor/Settings all start from the
+  // same blank slate rather than racing an auto-resume on every page load.
+  const [view, setView] = useState("menu");
+  const [menuLoadOpen, setMenuLoadOpen] = useState(false);
+  const [menuSettingsOpen, setMenuSettingsOpen] = useState(false);
   // Achievement tracking — lifetime flags for events that don't leave a lasting
   // trace in ongoing state (a loan gets repaid, a catastrophe happens once, etc).
   const [unlockedAchievements, setUnlockedAchievements] = useState([]); // [{id, unlockedAtWeek}]
@@ -4698,28 +4704,32 @@ export default function BookedRingsideEmpire() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  // Continue a save automatically on load — a website reloads far more often
-  // than the artifact preview's single long-lived tab did, so requiring a
-  // manual Load Save every time would lose the "just pick up where you left
-  // off" continuity players expect from a real site. Compares the manual
-  // save against the autosave and restores whichever is actually more
-  // recent — a manual save from early on shouldn't keep winning over shows
-  // played since then that only ever hit the autosave. Runs once, on mount.
+  // Just look up what's in storage, on mount — the landing menu (CONTINUE /
+  // LOAD GAME) reads saveInfo/autoSaveInfo to decide what to offer; nothing
+  // is actually loaded into live state until the player picks something.
   useEffect(() => {
-    (async () => {
-      try {
-        const [manualRes, autoRes] = await Promise.all([
-          window.storage.get("booked-save", false),
-          window.storage.get("booked-autosave", false),
-        ]);
-        const manual = manualRes ? JSON.parse(manualRes.value) : null;
-        const auto = autoRes ? JSON.parse(autoRes.value) : null;
-        const newest = !manual ? auto : !auto ? manual : (new Date(auto.savedAt) > new Date(manual.savedAt) ? auto : manual);
-        if (newest) applySaveSnapshot(newest);
-      } catch (e) {}
-    })();
+    refreshSaveSlots();
+    refreshPreviousGames();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Whichever of the manual save / autosave is more recent — what CONTINUE
+  // loads, and what a fresh New Game (from the menu, before anything's been
+  // loaded) safely leaves behind untouched in storage.
+  const newestSave = (() => {
+    if (!saveInfo && !autoSaveInfo) return null;
+    if (!saveInfo) return autoSaveInfo;
+    if (!autoSaveInfo) return saveInfo;
+    return new Date(autoSaveInfo.savedAt) > new Date(saveInfo.savedAt) ? autoSaveInfo : saveInfo;
+  })();
+  const continueGame = () => { if (newestSave) { applySaveSnapshot(newestSave); setView("game"); } };
+  const startNewGameFromMenu = () => { resetGame(); setView("game"); };
+  const loadSaveFromMenu = async (which) => {
+    if (which === "manual") await loadGame(); else await loadAutoSave();
+    setView("game");
+  };
+  const openWorldEditorFromMenu = () => { setTab("backoffice"); setBackOfficeSubTab("worldeditor"); setView("game"); };
+  const backToMenu = () => { refreshSaveSlots(); refreshPreviousGames(); setView("menu"); };
 
   useEffect(() => {
     // weekCount only advances once a show has actually been run — skips the
@@ -5113,6 +5123,74 @@ export default function BookedRingsideEmpire() {
     </div>
   );
 
+  if (view === "menu") {
+    const menuButtonClass = "w-full py-3 rounded-lg font-bold text-sm border border-[#2B2733] text-[#CFC9BB] hover:border-[#5B3B8C] hover:text-[#F2ECDD] transition-colors";
+    const describeSlot = (s) => `${s.companyName} · Wk ${s.weekCount} · £${s.bank.toLocaleString()} · ${formatDate(new Date(s.savedAt))}`;
+    return (
+      <div
+        className="min-h-screen w-full flex items-center justify-center p-4"
+        style={{
+          color: "#F2ECDD",
+          background: `
+            radial-gradient(ellipse 100% 65% at 20% -5%, rgba(91,59,140,0.65), transparent 65%),
+            radial-gradient(ellipse 80% 60% at 100% 15%, rgba(139,107,192,0.45), transparent 65%),
+            radial-gradient(ellipse 110% 75% at 50% 115%, rgba(91,59,140,0.55), transparent 70%),
+            linear-gradient(180deg, rgba(58,34,101,0.35), rgba(10,10,12,0.1) 55%),
+            #0A0A0C
+          `,
+        }}
+      >
+        <style>{FONT_IMPORT}</style>
+        <div className="max-w-sm w-full">
+          <div className="text-center mb-10">
+            <div className="text-5xl tracking-tight leading-none" style={{ fontFamily: "Anton, sans-serif" }}>BOOKED<span className="text-[#8B6BC0]">!</span></div>
+            <div className="text-[10px] tracking-[0.3em] text-[#8B8593] font-semibold mt-1">RINGSIDE EMPIRE</div>
+          </div>
+          <div className="space-y-2.5">
+            {newestSave && (
+              <button onClick={continueGame} className="w-full py-3.5 rounded-lg font-black text-sm tracking-widest" style={{ backgroundColor: "#5B3B8C", color: "#F2ECDD", fontFamily: "Anton, sans-serif" }}>
+                CONTINUE — {newestSave.companyName}
+              </button>
+            )}
+            <button onClick={startNewGameFromMenu} className={menuButtonClass}>NEW GAME</button>
+            <button onClick={() => { setMenuLoadOpen((o) => !o); setMenuSettingsOpen(false); }} className={menuButtonClass}>LOAD GAME</button>
+            {menuLoadOpen && (
+              <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-3 space-y-2">
+                {saveInfo ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[10px] text-[#8B8593]">{describeSlot(saveInfo)}</div>
+                    <button onClick={() => loadSaveFromMenu("manual")} className="shrink-0 text-[10px] font-bold px-2.5 py-1.5 rounded bg-[#5B3B8C] hover:bg-[#6C47A3]">Load Save</button>
+                  </div>
+                ) : <div className="text-[10px] text-[#8B8593] italic">No manual save yet.</div>}
+                {autoSaveInfo ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[10px] text-[#8B8593]">{describeSlot(autoSaveInfo)}</div>
+                    <button onClick={() => loadSaveFromMenu("auto")} className="shrink-0 text-[10px] font-bold px-2.5 py-1.5 rounded border border-[#5B3B8C] text-[#8B6BC0]">Load Autosave</button>
+                  </div>
+                ) : <div className="text-[10px] text-[#8B8593] italic">No autosave yet.</div>}
+              </div>
+            )}
+            <button onClick={openWorldEditorFromMenu} className={menuButtonClass}>WORLD EDITOR</button>
+            <button onClick={() => { setMenuSettingsOpen((o) => !o); setMenuLoadOpen(false); }} className={menuButtonClass}>SETTINGS</button>
+            {menuSettingsOpen && (
+              <div className="bg-[#2A1414] border border-red-500 rounded-lg p-3">
+                <div className="text-[10px] text-red-200 mb-2">Wipes your save, autosave, and entire Previous Games history. There is no undo.</div>
+                {!confirmingWipe ? (
+                  <button onClick={() => setConfirmingWipe(true)} className="w-full py-2 rounded font-bold text-xs border border-red-500 text-red-300">Reset All Data</button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button onClick={async () => { await wipeAllProgress(); setMenuSettingsOpen(false); }} className="flex-1 py-2 rounded bg-red-700 hover:bg-red-600 font-bold text-xs text-white">Yes, Wipe Everything</button>
+                    <button onClick={() => setConfirmingWipe(false)} className="flex-1 py-2 rounded border border-[#2B2733] text-xs text-[#8B8593]">Cancel</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="min-h-full w-full text-[#F2ECDD] p-3 sm:p-6 dt:pl-[264px]"
@@ -5130,10 +5208,10 @@ export default function BookedRingsideEmpire() {
       <style>{FONT_IMPORT}</style>
 
       <aside className="hidden dt:flex dt:flex-col fixed left-0 top-0 bottom-0 w-[240px] p-4 overflow-y-auto z-30" style={{ backgroundColor: "#0A0A0C", borderRight: "1px solid #2B2733" }}>
-        <div className="mb-6">
+        <button onClick={backToMenu} className="mb-6 text-left" title="Back to main menu">
           <div className="text-xl tracking-tight leading-none" style={{ fontFamily: "Anton, sans-serif" }}>BOOKED<span className="text-[#8B6BC0]">!</span></div>
           <div className="text-[8px] tracking-[0.3em] text-[#8B8593] font-semibold">RINGSIDE EMPIRE</div>
-        </div>
+        </button>
         {SIDEBAR_SECTIONS.map((section) => (
           <div key={section.title} className="mb-5">
             <div className="text-[9px] tracking-widest text-[#8B8593] font-bold mb-1.5 px-2">{section.title.toUpperCase()}</div>
@@ -5253,12 +5331,12 @@ export default function BookedRingsideEmpire() {
 
       <div className="max-w-4xl dt:max-w-6xl mx-auto mb-4 sm:mb-6 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <div>
+          <button onClick={backToMenu} className="text-left" title="Back to main menu">
             <div className="text-2xl sm:text-3xl tracking-tight leading-none" style={{ fontFamily: "Anton, sans-serif" }}>
               BOOKED<span className="text-[#8B6BC0]">!</span>
             </div>
             <div className="text-[9px] sm:text-[10px] tracking-[0.3em] text-[#8B8593] font-semibold">RINGSIDE EMPIRE</div>
-          </div>
+          </button>
           <button onClick={() => setNotesOpen(true)} className="text-[#8B8593] hover:text-[#8B6BC0] p-1.5 self-start" title="Notes">
             <NotebookPen size={18} />
           </button>
