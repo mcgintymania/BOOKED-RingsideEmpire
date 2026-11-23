@@ -367,7 +367,17 @@ function rollPerUseOffers(w) {
   const variance = 0.9 + Math.random() * 0.2; // re-rolled fresh each negotiation
   return PER_USE_OFFERS.map((o) => ({ ...o, fee: Math.round(base * o.mult * variance) }));
 }
-const HIRE_REFUSAL_CHANCE = 0.2;
+// Exclusive-contract wage tiers — same spirit as PER_USE_OFFERS, applied to
+// weeklyWage's multiplier instead of a one-off fee.
+const HIRE_WAGE_OFFERS = [
+  { key: "low", label: "Lowball", mult: 0.8, refusalChance: 0.4 },
+  { key: "standard", label: "Standard", mult: 1.0, refusalChance: 0.18 },
+  { key: "generous", label: "Generous", mult: 1.3, refusalChance: 0.04 },
+];
+// Any refused direct offer (hire or per-use) has a coin-flip chance of coming
+// back as a named counteroffer instead of a flat no — a real back-and-forth
+// instead of one take-it-or-leave-it roll.
+const COUNTER_OFFER_CHANCE = 0.5;
 const EXTENSION_REFUSAL_CHANCE = 0.25;
 const WEEKS_PER_YEAR = 52;
 const SCOUT_BASE_REFUSAL = 0.45;
@@ -1639,7 +1649,8 @@ const GUIDE_SECTIONS = [
   {
     key: "roster", title: "Roster, Wrestlers & Contracts", icon: Users,
     body: [
-      "There are two ways to use a wrestler: sign them Exclusive (a standing weekly wage, guaranteed available, no per-appearance fee) or add them to your Per-Use list (free to add, but you negotiate a fee — Low/Medium/High offer, cheaper offers are more likely refused — and pay it each time you actually book them). Per-use is cheaper per appearance, but exclusive guarantees you'll never lose access to them.",
+      "There are two ways to use a wrestler: sign them Exclusive (a standing weekly wage, guaranteed available, no per-appearance fee) or add them to your Per-Use list (free to add, but you negotiate a fee — Lowball/Standard/Generous offer, cheaper offers are more likely refused — and pay it each time you actually book them). Per-use is cheaper per appearance, but exclusive guarantees you'll never lose access to them. Either kind of offer can also come back as a counteroffer instead of a flat no — accept their number or walk away — and your odds of a yes depend on your own company's reputation as well as their mood: a name right at the top of what you're allowed to approach is always a harder sell than one comfortably within your reach.",
+      "Star a wrestler from the Wrestlers list to add them to your Shortlist (filter for \"Shortlisted only\" to see just them, whoever they're signed to right now) — a running watchlist for names you're building toward, not just who's available this week. The Wrestlers tab also surfaces a \"Who To Chase Next\" panel of the best free agents currently within your reach.",
       "A wrestler's Overall stat is fixed ability — it never changes from booking decisions. Push (their card status, from Jobber up to Legend) is separate and yours to set for anyone signed to you, exclusive or per-use — a skilled worker can be booked as a jobber, and nobody becomes a Legend just from good stats alone. Same goes for Alignment and renaming: editable for your own people, read-only for anyone signed elsewhere.",
       "Wrestlers age in real time — every 52 weeks, everyone gets a year older. Past 35 there's a real chance of small permanent dips to their physical stats; past 30, experience can show up as a charisma or mic-skill bump instead. A win also has a small chance of a tiny permanent boost tied to how it was won.",
       "Every wrestler also has Draw Power — how much they actually pull a crowd, separate from in-ring ability. It grows from winning, good matches, and title moments, and fades slowly if they're never booked anywhere. Who you put in the Main Event can swing a show's attendance up to ±25%.",
@@ -1881,6 +1892,8 @@ export default function BookedRingsideEmpire() {
   const [hiringTarget, setHiringTarget] = useState(null);
   const [hireWeeks, setHireWeeks] = useState(26);
   const [hireLevel, setHireLevel] = useState("main");
+  const [hireWageKey, setHireWageKey] = useState("standard");
+  const [hireCounter, setHireCounter] = useState(null);
   const [hireResult, setHireResult] = useState(null);
   const [scoutingTarget, setScoutingTarget] = useState(null);
   const [scoutResult, setScoutResult] = useState(null);
@@ -1891,6 +1904,7 @@ export default function BookedRingsideEmpire() {
   const [extendResult, setExtendResult] = useState(null);
   const [financeYear, setFinanceYear] = useState(1);
   const [perUseRoster, setPerUseRoster] = useState([]);
+  const [shortlist, setShortlist] = useState([]);
   const [sortField, setSortField] = useState("overall");
   const [rankingsFilter, setRankingsFilter] = useState("all");
   const [rankingsMode, setRankingsMode] = useState("singles");
@@ -1905,11 +1919,11 @@ export default function BookedRingsideEmpire() {
     minOverall: 0, maxOverall: 100, minRanking: -100, maxRanking: 200,
     stats: Object.fromEntries(STAT_KEYS.map((k) => [k, 0])),
     statsMax: Object.fromEntries(STAT_KEYS.map((k) => [k, 100])),
-    availableOnly: false, promotion: "all",
+    availableOnly: false, promotion: "all", shortlistOnly: false,
   };
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const resetFilters = () => setFilters(DEFAULT_FILTERS);
-  const filtersActive = filters.gender !== "all" || filters.weightClass !== "all" || filters.minOverall > 0 || filters.maxOverall < 100 || filters.minRanking > -100 || filters.maxRanking < 200 || STAT_KEYS.some((k) => filters.stats[k] > 0 || filters.statsMax[k] < 100) || filters.availableOnly || filters.promotion !== "all";
+  const filtersActive = filters.gender !== "all" || filters.weightClass !== "all" || filters.minOverall > 0 || filters.maxOverall < 100 || filters.minRanking > -100 || filters.maxRanking < 200 || STAT_KEYS.some((k) => filters.stats[k] > 0 || filters.statsMax[k] < 100) || filters.availableOnly || filters.promotion !== "all" || filters.shortlistOnly;
   const passesFilters = (w) => {
     if (wrestlerSearch.trim() && !w.name.toLowerCase().includes(wrestlerSearch.trim().toLowerCase())) return false;
     if (filters.gender !== "all" && w.sex !== filters.gender) return false;
@@ -1926,11 +1940,14 @@ export default function BookedRingsideEmpire() {
       if (filters.promotion === "freelance" && w.contractedTo !== null) return false;
       if (filters.promotion !== "freelance" && w.contractedTo !== filters.promotion) return false;
     }
+    if (filters.shortlistOnly && !shortlist.includes(w.name)) return false;
     return true;
   };
+  const toggleShortlist = (name) => setShortlist((sl) => (sl.includes(name) ? sl.filter((n) => n !== name) : [...sl, name]));
   const [negotiatingTarget, setNegotiatingTarget] = useState(null);
   const [negotiationOffers, setNegotiationOffers] = useState([]);
   const [negotiationResult, setNegotiationResult] = useState(null);
+  const [negotiationCounter, setNegotiationCounter] = useState(null);
 
   const [arenaIdx, setArenaIdx] = useState(0);
   const arena = ARENAS[arenaIdx];
@@ -2101,7 +2118,7 @@ export default function BookedRingsideEmpire() {
 
   const hireTierCap = HIRE_TIER_CAP[popularityTier(popularity)];
   const exceedsHireCap = (w) => hireTierCap != null && TIER_ORDER.indexOf(w.tier) > TIER_ORDER.indexOf(hireTierCap);
-  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireLevel("main"); setHireResult(null); };
+  const startHiring = (w) => { setHiringTarget(w); setHireWeeks(26); setHireLevel("main"); setHireWageKey("standard"); setHireCounter(null); setHireResult(null); };
   const happinessRefusalAdj = (w) => {
     if (w.happiness < 20) return 0.3;
     if (w.happiness < 40) return 0.15;
@@ -2109,21 +2126,49 @@ export default function BookedRingsideEmpire() {
     if (w.happiness > 70) return -0.03;
     return 0;
   };
+  // Leverage: how big a stretch this name is for a promotion at your level.
+  // Someone right at the top of what you're even allowed to approach is a
+  // hard sell regardless of the offer; someone well within your reach is an
+  // easy one — your own reputation (popularity tier), not just their mood.
+  const reputationRefusalAdj = (w) => {
+    const cap = HIRE_TIER_CAP[popularityTier(popularity)];
+    const capIdx = cap ? TIER_ORDER.indexOf(cap) : TIER_ORDER.length - 1;
+    const edge = capIdx - TIER_ORDER.indexOf(w.tier);
+    return clamp(0.12 - edge * 0.04, -0.06, 0.12);
+  };
 
+  const finalizeHire = (mult) => {
+    if (!hiringTarget) return;
+    const signedLevel = hireLevel === "developmental" && feederCompany ? "developmental" : "main";
+    setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, contractedTo: "player", contractExpiresWeek: weekNumber + hireWeeks, rosterLevel: signedLevel, wageMultiplier: mult } : w)));
+    setPerUseRoster((pu) => pu.filter((n) => n !== hiringTarget.name));
+    setUniverseFeed((feed) => [{ id: `h-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has signed ${hiringTarget.name} to an exclusive contract${signedLevel === "developmental" ? " (Developmental)" : ""}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
+    setHireResult("accepted");
+  };
   const confirmHire = () => {
     if (!hiringTarget || exceedsHireCap(hiringTarget)) return;
-    const refused = Math.random() < clamp(HIRE_REFUSAL_CHANCE + happinessRefusalAdj(hiringTarget), 0.02, 0.9);
+    const offer = HIRE_WAGE_OFFERS.find((o) => o.key === hireWageKey);
+    const refused = Math.random() < clamp(offer.refusalChance + happinessRefusalAdj(hiringTarget) + reputationRefusalAdj(hiringTarget), 0.02, 0.9);
     if (refused) {
+      if (Math.random() < COUNTER_OFFER_CHANCE) {
+        const counterMult = Math.round(offer.mult * (1.15 + Math.random() * 0.2) * 100) / 100;
+        setHireCounter({ mult: counterMult });
+        setHireResult("countered");
+        return;
+      }
       const cooldownWeeks = rand(1, 3);
       setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, hireCooldownUntil: weekNumber + cooldownWeeks } : w)));
       setHireResult("refused");
       return;
     }
-    const signedLevel = hireLevel === "developmental" && feederCompany ? "developmental" : "main";
-    setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, contractedTo: "player", contractExpiresWeek: weekNumber + hireWeeks, rosterLevel: signedLevel } : w)));
-    setPerUseRoster((pu) => pu.filter((n) => n !== hiringTarget.name));
-    setUniverseFeed((feed) => [{ id: `h-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has signed ${hiringTarget.name} to an exclusive contract${signedLevel === "developmental" ? " (Developmental)" : ""}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
-    setHireResult("accepted");
+    finalizeHire(offer.mult);
+  };
+  const acceptHireCounter = () => { if (hireCounter) finalizeHire(hireCounter.mult); };
+  const walkAwayFromHireCounter = () => {
+    if (!hiringTarget) return;
+    const cooldownWeeks = rand(1, 3);
+    setPool((p) => p.map((w) => (w.name === hiringTarget.name ? { ...w, hireCooldownUntil: weekNumber + cooldownWeeks } : w)));
+    setHireResult("refused");
   };
   const buyoutCost = (w) => {
     const remainingWeeks = Math.max(0, (w.contractExpiresWeek || weekNumber) - weekNumber);
@@ -2368,20 +2413,38 @@ export default function BookedRingsideEmpire() {
   const startNegotiating = (w) => {
     setNegotiatingTarget(w);
     setNegotiationOffers(rollPerUseOffers(w));
+    setNegotiationCounter(null);
     setNegotiationResult(null);
+  };
+  const finalizePerUse = (fee) => {
+    if (!negotiatingTarget) return;
+    setPool((p) => p.map((w) => (w.name === negotiatingTarget.name ? { ...w, perUseFee: fee } : w)));
+    setPerUseRoster((pu) => (pu.includes(negotiatingTarget.name) ? pu : [...pu, negotiatingTarget.name]));
+    setNegotiationResult("accepted");
   };
   const pickPerUseOffer = (offer) => {
     if (!negotiatingTarget) return;
-    const refused = Math.random() < clamp(offer.refusalChance + happinessRefusalAdj(negotiatingTarget), 0.02, 0.95);
+    const refused = Math.random() < clamp(offer.refusalChance + happinessRefusalAdj(negotiatingTarget) + reputationRefusalAdj(negotiatingTarget), 0.02, 0.95);
     if (refused) {
+      if (Math.random() < COUNTER_OFFER_CHANCE) {
+        const counterFee = Math.round(offer.fee * (1.2 + Math.random() * 0.25));
+        setNegotiationCounter({ fee: counterFee });
+        setNegotiationResult("countered");
+        return;
+      }
       const cooldownWeeks = rand(1, 3);
       setPool((p) => p.map((w) => (w.name === negotiatingTarget.name ? { ...w, hireCooldownUntil: weekNumber + cooldownWeeks } : w)));
       setNegotiationResult("refused");
       return;
     }
-    setPool((p) => p.map((w) => (w.name === negotiatingTarget.name ? { ...w, perUseFee: offer.fee } : w)));
-    setPerUseRoster((pu) => (pu.includes(negotiatingTarget.name) ? pu : [...pu, negotiatingTarget.name]));
-    setNegotiationResult("accepted");
+    finalizePerUse(offer.fee);
+  };
+  const acceptNegotiationCounter = () => { if (negotiationCounter) finalizePerUse(negotiationCounter.fee); };
+  const walkAwayFromNegotiationCounter = () => {
+    if (!negotiatingTarget) return;
+    const cooldownWeeks = rand(1, 3);
+    setPool((p) => p.map((w) => (w.name === negotiatingTarget.name ? { ...w, hireCooldownUntil: weekNumber + cooldownWeeks } : w)));
+    setNegotiationResult("refused");
   };
   const removePerUse = (name) => setPerUseRoster((pu) => pu.filter((n) => n !== name));
 
@@ -4128,7 +4191,7 @@ export default function BookedRingsideEmpire() {
     hasRenamedWrestler, bookedFatal4Ever, bookedCageEver, maxAttendanceEver, hasSoldOutEver, maxShowRatingEver,
     hallOfFame, wrestlerReignCounts, merchStock, merchQualityTier, wrestlerMerchSales, recentMatchups,
     scheduledEvents, eventTemplates, workingAgreements, feederCompany,
-    staffPool, productionTier, fanTrendKey,
+    staffPool, productionTier, fanTrendKey, shortlist,
   });
 
   const applySaveSnapshot = (s) => {
@@ -4175,6 +4238,7 @@ export default function BookedRingsideEmpire() {
     setProductionTier(s.productionTier ?? 0);
     setFanTrendKey(s.fanTrendKey || FAN_TRENDS[0].key);
     setStaffPool(s.staffPool || buildStaffPool());
+    setShortlist(s.shortlist || []);
     setArenaIdx(1); setCity(null);
     setSegments([]);
     setDarkMatches([]);
@@ -4837,9 +4901,18 @@ export default function BookedRingsideEmpire() {
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setNegotiatingTarget(null)}>
           <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
             <div className="text-lg font-black mb-1" style={{ fontFamily: "Anton, sans-serif" }}>NEGOTIATE WITH {negotiatingTarget.name.toUpperCase()}</div>
-            <div className="text-[10px] text-[#8B8593] mb-3">Offers are re-rolled fresh each time. A lower fee is more likely to be turned down.</div>
+            <div className="text-[10px] text-[#8B8593] mb-3">Offers are re-rolled fresh each time. A lower fee is more likely to be turned down — though a refusal sometimes comes back as a counteroffer instead of a flat no.</div>
             {negotiationResult === "refused" && <div className="text-xs text-red-400 mb-3">{negotiatingTarget.name} turned that down. They're off-limits for a few weeks.</div>}
             {negotiationResult === "accepted" && <div className="text-xs text-[#8B6BC0] mb-3">Deal struck! Added to your per-use roster.</div>}
+            {negotiationResult === "countered" && negotiationCounter && (
+              <div className="text-xs text-[#8B6BC0] mb-3">
+                {negotiatingTarget.name} turned that down, but says they'd sign for £{negotiationCounter.fee.toLocaleString()}/show instead.
+                <div className="flex gap-2 mt-2">
+                  <button onClick={acceptNegotiationCounter} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded text-[#F2ECDD]">Accept £{negotiationCounter.fee.toLocaleString()}</button>
+                  <button onClick={walkAwayFromNegotiationCounter} className="flex-1 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Walk Away</button>
+                </div>
+              </div>
+            )}
             {!negotiationResult && (
               <div className="space-y-2">
                 {negotiationOffers.map((o) => (
@@ -5754,6 +5827,31 @@ export default function BookedRingsideEmpire() {
             <div className="text-[10px] text-[#8B8593] mb-3">Add to Per-Use for a standing freelance pick, or sign Exclusive for a weekly-wage contract. {feederCompany ? "Young or undersized talent signed to a rival can be Scouted straight into your Developmental system." : "Found a feeder promotion from Back Office to unlock Scouting rival prospects into Developmental."}</div>
             <input value={wrestlerSearch} onChange={(e) => setWrestlerSearch(e.target.value)} placeholder="Search wrestlers by name..." className="w-full border border-[#2B2733] rounded px-3 py-1.5 text-xs mb-3" style={{ backgroundColor: "#0A0A0C", color: "#F2ECDD" }} />
 
+            {(() => {
+              const targets = [...pool]
+                .filter((w) => w.contractedTo === null && !(w.hireCooldownUntil && weekNumber < w.hireCooldownUntil) && !exceedsHireCap(w) && !shortlist.includes(w.name))
+                .sort((a, b) => attrOf(b) - attrOf(a))
+                .slice(0, 4);
+              if (targets.length === 0) return null;
+              return (
+                <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-3 mb-3">
+                  <div className="text-[10px] tracking-widest text-[#8B6BC0] font-bold mb-1.5">WHO TO CHASE NEXT</div>
+                  <div className="text-[9px] text-[#8B8593] mb-2">Top free agents within your reach — not already on your shortlist.</div>
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    {targets.map((w) => (
+                      <div key={w.name} className="flex items-center justify-between gap-2 bg-[#0A0A0C] border border-[#2B2733] rounded px-2.5 py-1.5">
+                        <button onClick={() => setDetailWrestler(w)} className="text-xs font-bold text-left hover:text-[#8B6BC0] truncate">{w.name}</button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[9px] text-[#8B6BC0]">OVR {Math.round(attrOf(w))} &middot; {w.tier}</span>
+                          <button onClick={() => toggleShortlist(w.name)} className="text-[#8B8593] hover:text-yellow-400" title="Add to shortlist"><Star size={12} /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {showFilters && (
               <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-3 mb-3 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
@@ -5785,6 +5883,10 @@ export default function BookedRingsideEmpire() {
                 <label className="flex items-center gap-2 text-[10px] text-[#8B8593] cursor-pointer">
                   <input type="checkbox" checked={filters.availableOnly} onChange={(e) => setFilters((f) => ({ ...f, availableOnly: e.target.checked }))} className="accent-[#8B6BC0]" />
                   Available to hire only
+                </label>
+                <label className="flex items-center gap-2 text-[10px] text-[#8B8593] cursor-pointer">
+                  <input type="checkbox" checked={filters.shortlistOnly} onChange={(e) => setFilters((f) => ({ ...f, shortlistOnly: e.target.checked }))} className="accent-[#8B6BC0]" />
+                  Shortlisted only
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -5831,7 +5933,12 @@ export default function BookedRingsideEmpire() {
                 return (
                   <div key={w.name} className="bg-[#131117] border border-[#2B2733] rounded-lg p-3">
                     <div className="flex items-center justify-between mb-1 gap-2">
-                      <button onClick={() => setDetailWrestler(w)} className="font-black text-sm text-left hover:text-[#8B6BC0] transition-colors truncate" style={{ fontFamily: "Anton, sans-serif" }}>{w.name.toUpperCase()}</button>
+                      <div className="flex items-center gap-1 min-w-0">
+                        <button onClick={() => toggleShortlist(w.name)} className={shortlist.includes(w.name) ? "text-yellow-400 shrink-0" : "text-[#8B8593] hover:text-yellow-400 shrink-0"} title={shortlist.includes(w.name) ? "Remove from shortlist" : "Add to shortlist"}>
+                          <Star size={13} fill={shortlist.includes(w.name) ? "currentColor" : "none"} />
+                        </button>
+                        <button onClick={() => setDetailWrestler(w)} className="font-black text-sm text-left hover:text-[#8B6BC0] transition-colors truncate" style={{ fontFamily: "Anton, sans-serif" }}>{w.name.toUpperCase()}</button>
+                      </div>
                       {!rival && !isPlayerSigned && !onCooldown && (
                         <div className="flex gap-1 shrink-0">
                           {!isPerUse && (
@@ -5866,15 +5973,33 @@ export default function BookedRingsideEmpire() {
               <div className="fixed inset-0 flex items-center justify-center z-50 p-4 booked-modal-backdrop" style={{ backgroundColor: "rgba(4,4,6,0.94)" }} onClick={() => setHiringTarget(null)}>
                 <div className="booked-modal-card border rounded-lg p-5 max-w-sm w-full" style={{ backgroundColor: "#17151C", color: "#F2ECDD", borderColor: "#5B3B8C" }} onClick={(e) => e.stopPropagation()}>
                   <div className="text-lg font-black mb-1" style={{ fontFamily: "Anton, sans-serif" }}>SIGN {hiringTarget.name.toUpperCase()}</div>
-                  <div className="text-[10px] text-[#8B8593] mb-3">£{weeklyWage(hiringTarget).toLocaleString()}/week, billed automatically while under contract. They might say no — if so, they're off-limits for 1-3 weeks.</div>
+                  <div className="text-[10px] text-[#8B8593] mb-3">Weekly wage is billed automatically while under contract. A lowball offer is cheaper but more likely to be turned down — a refusal sometimes comes back as a counteroffer instead of a flat no.</div>
                   {hireResult === "refused" && <div className="text-xs text-red-400 mb-3">{hiringTarget.name} turned down the offer. Try again in a few weeks.</div>}
                   {hireResult === "accepted" && <div className="text-xs text-[#8B6BC0] mb-3">Signed!</div>}
+                  {hireResult === "countered" && hireCounter && (
+                    <div className="text-xs text-[#8B6BC0] mb-3">
+                      {hiringTarget.name} turned that down, but says they'd sign for £{Math.round(weeklyWage(hiringTarget) * hireCounter.mult).toLocaleString()}/week instead.
+                      <div className="flex gap-2 mt-2">
+                        <button onClick={acceptHireCounter} className="flex-1 py-2 bg-[#5B3B8C] hover:bg-[#6C47A3] text-xs font-bold rounded text-[#F2ECDD]">Accept</button>
+                        <button onClick={walkAwayFromHireCounter} className="flex-1 py-2 border border-[#2B2733] text-xs text-[#8B8593] hover:text-[#F2ECDD] rounded">Walk Away</button>
+                      </div>
+                    </div>
+                  )}
                   {!hireResult && (
                     <>
                       <div className="grid grid-cols-2 gap-2 mb-3">
                         {CONTRACT_OPTIONS.map((wk) => (
                           <button key={wk} onClick={() => setHireWeeks(wk)} className={`px-3 py-2 rounded text-xs font-bold border ${hireWeeks === wk ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`} style={hireWeeks === wk ? { backgroundColor: "#5B3B8C", borderColor: "#5B3B8C" } : undefined}>
                             {wk} weeks
+                          </button>
+                        ))}
+                      </div>
+                      <div className="text-[9px] text-[#8B8593] mb-1">WAGE OFFER</div>
+                      <div className="space-y-2 mb-3">
+                        {HIRE_WAGE_OFFERS.map((o) => (
+                          <button key={o.key} onClick={() => setHireWageKey(o.key)} className={`w-full flex items-center justify-between px-3 py-2 rounded border text-left ${hireWageKey === o.key ? "border-[#5B3B8C] bg-[#241B33]" : "border-[#2B2733] hover:border-[#5B3B8C]"}`}>
+                            <span className="text-xs font-bold">{o.label}</span>
+                            <span className="text-[10px] text-[#8B8593]">£{Math.round(weeklyWage(hiringTarget) * o.mult).toLocaleString()}/wk &middot; {Math.round(o.refusalChance * 100)}% refuse</span>
                           </button>
                         ))}
                       </div>
