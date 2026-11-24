@@ -49,11 +49,15 @@ const STAT_KEYS = ["str", "spd", "fit", "cha", "def", "ent", "eng", "jmp", "atk"
 const PERFORMANCE_STAT_KEYS = STAT_KEYS.filter((k) => k !== "eng");
 const STAT_ICONS = { str: HeartPulse, spd: Wind, fit: Zap, cha: Mic2, def: Shield, ent: Sparkles, eng: BatteryCharging, jmp: ArrowUpCircle, atk: Swords, spec: Layers, sub: Lock };
 const STAT_LABELS = { str: "STRENGTH", spd: "SPEED", fit: "FITNESS", cha: "CHARISMA", def: "DEFENCE", ent: "ENTERTAINMENT", eng: "ENERGY", jmp: "JUMPING", atk: "ATTACK", spec: "SPECIALTY", sub: "SUBMISSION" };
-const TIER_ORDER = ["Jobber", "Lower Card", "Mid Card", "Upper Card", "Main Event", "Legend"];
+// How a wrestler is actually being booked right now — jobbers lose, main
+// eventers headline. "Legend" is deliberately not on this list: that's a
+// status a career earns over time (see the Legend trait in deriveTraits),
+// not a push level a booker can just hand someone from a dropdown.
+const TIER_ORDER = ["Jobber", "Lower Card", "Mid Card", "Upper Card", "Main Event"];
 // Exclusive signing only — a tiny promotion shouldn't be able to permanently
-// lock down a Legend-tier star. Per-use is unrestricted; renting a big name
-// for one night stays realistic regardless of your size.
-const HIRE_TIER_CAP = { Unknown: "Mid Card", Local: "Upper Card", Regional: "Main Event", National: "Legend", Global: null };
+// lock down a top-of-the-card star. Per-use is unrestricted; renting a big
+// name for one night stays realistic regardless of your size.
+const HIRE_TIER_CAP = { Unknown: "Mid Card", Local: "Upper Card", Regional: "Main Event", National: "Main Event", Global: null };
 // Merchandise unlocks once you're an established enough draw for a stall to
 // be worth running. Stock persists — buy it upfront, sell it show after show
 // until it runs out, and restock proactively or leave demand unmet.
@@ -91,7 +95,7 @@ const ACHIEVEMENTS = [
   { id: "bank-1m", name: "Millionaire Promoter", desc: "Reach £1,000,000 in the bank", icon: Wallet, check: (c) => c.bank >= 1000000 },
   { id: "survive-52", name: "One Year In", desc: "Survive 52 weeks", icon: Calendar, check: (c) => c.weekCount > 52 },
   { id: "survive-260", name: "Five Years Strong", desc: "Survive 260 weeks", icon: Calendar, check: (c) => c.weekCount > 260 },
-  { id: "legend-wrestler", name: "Bona Fide Legend", desc: "Sign a Legend-tier wrestler", icon: Star, check: (c) => c.roster.some((w) => effectiveTier(w) === "Legend") },
+  { id: "legend-wrestler", name: "Bona Fide Legend", desc: "Have a wrestler earn Legend status on your roster", icon: Star, check: (c) => c.roster.some((w) => deriveTraits(w).some((t) => t.key === "legend")) },
   { id: "veteran-wrestler", name: "Old Timer", desc: "Sign a wrestler aged 40 or older", icon: Star, check: (c) => c.roster.some((w) => w.age >= 40) },
   { id: "create-stable", name: "Stable Genius", desc: "Form a tag team or stable yourself", icon: Users2, check: (c) => c.hasCreatedStableManually },
   { id: "create-rivalry", name: "Manufactured Beef", desc: "Manually create a rivalry", icon: Flame, check: (c) => c.hasCreatedRivalryManually },
@@ -720,7 +724,6 @@ function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
 function tierFromAvg(avg) {
-  if (avg >= 80) return "Legend";
   if (avg >= 68) return "Main Event";
   if (avg >= 55) return "Upper Card";
   if (avg >= 40) return "Mid Card";
@@ -731,8 +734,8 @@ function tierFromAvg(avg) {
 // since that's about whether a wrestler is genuinely out of a small
 // promotion's league. pushOverride is how the booker actually presents them
 // once signed — a "Jobber" can be a highly skilled worker who's just booked
-// to lose, and nobody becomes a "Legend" just by rolling good stats. Once set,
-// it's what displays everywhere except the hiring cap check.
+// to lose, and great stats alone don't make someone a Main Eventer either.
+// Once set, it's what displays everywhere except the hiring cap check.
 function effectiveTier(w) {
   return w.pushOverride || w.tier;
 }
@@ -782,6 +785,7 @@ const TRAIT_DEFS = {
   clutch: { label: "Clutch Performer", desc: "Delivers when it matters — gets a small rating bump in title matches and the Main Event." },
   risingstar: { label: "Rising Star", desc: "Young, with real room left to grow against their Potential — worth developing." },
   legacy: { label: "Second Generation", desc: `Follows a parent into the business.` },
+  legend: { label: "Legend", desc: "A career, not a push — real sustained ability, multiple title reigns, and real ring time behind them. Can't be assigned, only earned." },
 };
 function deriveTraits(w) {
   const keys = [];
@@ -792,6 +796,7 @@ function deriveTraits(w) {
   if (w.titleReigns >= 1 && w.wins + w.losses >= 20 && w.wins / (w.wins + w.losses) >= 0.65) keys.push("clutch");
   if (w.age <= 23 && potentialOf(w) - avgStats(w) >= 15) keys.push("risingstar");
   if (w.legacyParent) keys.push("legacy");
+  if (avgStats(w) >= 78 && w.titleReigns >= 2 && w.matches >= 50) keys.push("legend");
   return keys.map((key) => ({ key, ...TRAIT_DEFS[key] }));
 }
 function makeWrestler(name) {
@@ -1819,14 +1824,14 @@ const GUIDE_SECTIONS = [
       "There are two ways to use a wrestler: sign them Exclusive (a standing weekly wage, guaranteed available, no per-appearance fee) or add them to your Per-Use list (free to add, but you negotiate a fee — Low/Medium/High offer, cheaper offers are more likely refused, and a refusal sometimes comes back as a counteroffer to accept or walk away from — then pay it each time you actually book them). Per-use settles on the spot. An Exclusive offer doesn't — it posts to the News and opens a bidding war that settles in a few weeks, giving a rival time to notice and counter-bid with their own money, length, and reputation. The wrestler weighs every offer on the table themselves: money, how much room there is to actually grow at that company, its popularity, and whether the length fits their career stage — a young up-and-comer is wary of a long exclusive deal with a small promotion, a veteran doesn't mind the security.",
       "A contract within its last few weeks is poachable the same way — if you don't extend it, a rival might already be circling, and whoever makes the better overall case wins them when it actually lapses. Extend early from the Roster tab to settle it outright and shut any brewing interest down.",
       "Star a wrestler from the Wrestlers list to add them to your Shortlist (filter for \"Shortlisted only\" to see just them, whoever they're signed to right now) — a running watchlist for names you're building toward, not just who's available this week. The Wrestlers tab also surfaces a \"Who To Chase Next\" panel of the best free agents currently within your reach.",
-      "A wrestler's Overall stat is fixed ability — it never changes from booking decisions. Push (their card status, from Jobber up to Legend) is separate and yours to set for anyone signed to you, exclusive or per-use — a skilled worker can be booked as a jobber, and nobody becomes a Legend just from good stats alone. You can set their starting Push right in the SIGN offer too, not just afterward. Either way, a real promotion or demotion is a genuine happiness swing, up or down, scaled to how many rungs it actually was. Same goes for Alignment and renaming: editable for your own people, read-only for anyone signed elsewhere.",
+      "A wrestler's Overall stat is fixed ability — it never changes from booking decisions. Push (their card status, from Jobber up to Main Event) is separate and yours to set for anyone signed to you, exclusive or per-use — a skilled worker can be booked as a jobber, and nobody becomes a Main Eventer just from good stats alone. You can set their starting Push right in the SIGN offer too, not just afterward. Either way, a real promotion or demotion is a genuine happiness swing, up or down, scaled to how many rungs it actually was. Legend status sits above all of that and isn't something you assign — it's a Trait a career earns (real ability, multiple title reigns, real ring time), the same way Fan Favorite or Clutch Performer are. Same goes for Alignment and renaming: editable for your own people, read-only for anyone signed elsewhere.",
       "Wrestlers age in real time — every 52 weeks, everyone gets a year older. Past 35 there's a real chance of small permanent dips to their physical stats; past 30, experience can show up as a charisma or mic-skill bump instead. A win also has a small chance of a tiny permanent boost tied to how it was won.",
       "Every wrestler also has Draw Power — how much they actually pull a crowd, separate from in-ring ability. It grows from winning, good matches, and title moments, and fades slowly if they're never booked anywhere. Who you put in the Main Event can swing a show's attendance up to ±25%.",
       "A Per-Use offer might get turned down — if refused outright, they're off-limits to you for 1-3 weeks before you can try again. Releasing an Exclusive wrestler mid-contract also costs a buyout, 50% of their remaining contract wage, shown before you confirm.",
       "Wrestlers have Energy (drains with use, recovers when rested — low energy hurts both their win chance and the match rating, but never permanently affects their Overall) and Happiness (affected by requests you promise and then fulfil, break, or decline, plus wins, losses, injuries, and title changes). Watch the Requests tab under Roster for what your talent is asking for. A wrestler 33 or older occasionally asks for a Role Change instead — granting it retires them from in-ring competition straight into your Staff candidate pool as an Agent, Assistant Booker, or Trainer, the same destination some retirees land in on their own.",
       "Injuries can happen after a draining match, sidelining someone 3-52 weeks with a specific injury type (knee, back, concussion, and others) — including champions, who are forced to vacate their title if it happens to them.",
       "Some retirees leave a legacy — a kid who grows up around the business and debuts as a free agent 15-20 years later, carrying the family name. You won't see it happen when it's rolled, only when the kid actually shows up in the News — their Potential is pulled toward how good the parent really was at their peak, not whatever they'd declined to by retirement, so a legendary career can genuinely pay off a generation later.",
-      "A wrestler's detail screen can show Traits — tags earned from who they've actually become over their career, not rolled at creation: Fan Favorite (high draw power, and it keeps snowballing), Workhorse (serious ring-time logged), Flight Risk (unhappy right now), Locker Room Leader (happy and experienced), Clutch Performer (a strong win rate plus a title reign — gets a small rating bump specifically in title matches and the Main Event), Rising Star (young with real room left against their Potential), and Second Generation (a legacy debut). Nothing to manage here — they just read as a snapshot of the career so far.",
+      "A wrestler's detail screen can show Traits — tags earned from who they've actually become over their career, not rolled at creation: Fan Favorite (high draw power, and it keeps snowballing), Workhorse (serious ring-time logged), Flight Risk (unhappy right now), Locker Room Leader (happy and experienced), Clutch Performer (a strong win rate plus a title reign — gets a small rating bump specifically in title matches and the Main Event), Rising Star (young with real room left against their Potential), Second Generation (a legacy debut), and Legend (real sustained ability, multiple title reigns, and real ring time — the one status that's genuinely earned rather than pushed). Nothing to manage here — they just read as a snapshot of the career so far.",
       "Roster cards (Roster, Per-Use, and the world Wrestlers browser) carry a colored left edge at a glance: red for a fresh injury, orange once they're down to their last couple weeks out (nearly recovered), gold for a reigning champion.",
     ],
   },
@@ -4680,7 +4685,15 @@ export default function BookedRingsideEmpire() {
     setCityPopularity({ ...Object.fromEntries(CITIES.map((c) => [c, 0])), ...(s.cityPopularity || {}) });
     setStartingCity(s.startingCity || null);
     setCityVisits({ ...Object.fromEntries(CITIES.map((c) => [c, 0])), ...(s.cityVisits || {}) });
-    setPool(s.pool || buildInitialPool());
+    // Legend used to be a selectable push tier (removed — it's an earned
+    // Trait now, see deriveTraits). An older save can still have "Legend"
+    // sitting in a wrestler's tier/pushOverride; normalize it to the new top
+    // rung so TIER_ORDER lookups elsewhere don't just quietly drop them.
+    setPool((s.pool || buildInitialPool()).map((w) => ({
+      ...w,
+      tier: w.tier === "Legend" ? "Main Event" : w.tier,
+      pushOverride: w.pushOverride === "Legend" ? "Main Event" : w.pushOverride,
+    })));
     setRivalCompanies(s.rivalCompanies || RIVAL_COMPANIES.map((c, i) => ({ ...c, funds: RIVAL_STARTING_FUNDS[i] ?? 25000, showsRun: 0, lastTier: popularityTier(c.popularity) })));
     setRivalTitles(s.rivalTitles || RIVAL_COMPANIES.map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: null })));
     setNextReserveIndex(s.nextReserveIndex ?? BULK_DEBUT_COUNT);
