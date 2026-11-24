@@ -628,6 +628,20 @@ const NETWORKS = [
   { id: "primewrestling", name: "PrimeWrestling Network", minPopularity: 70, viewerMult: 550, payPerViewer: 0.70 },
   { id: "globalslam", name: "Global SlamStream", minPopularity: 85, viewerMult: 800, payPerViewer: 1.00 },
 ];
+// The Ratings leaderboard needs a network + viewer estimate for every show
+// ever run, player and rival alike — not just the one deal the player
+// might actually have signed. Reuses the exact same popularity*viewerMult
+// math as a real network deal, picking whichever network a company's
+// popularity at the time would have actually qualified for.
+function networkFor(popularity) {
+  const eligible = NETWORKS.filter((n) => popularity >= n.minPopularity);
+  return eligible.length > 0 ? eligible[eligible.length - 1] : NETWORKS[0];
+}
+function estimatedViewers(popularity, wasPPV) {
+  const net = networkFor(popularity);
+  const base = Math.round(popularity * net.viewerMult);
+  return wasPPV ? Math.round(base * 1.4) : base;
+}
 // Fictional sponsors — same idea, flat weekly pay instead of per-viewer.
 const SPONSORS = [
   { id: "ironclad", name: "Ironclad Energy Drinks", minPopularity: 10, payMin: 200, payMax: 500 },
@@ -1865,6 +1879,7 @@ const GUIDE_SECTIONS = [
       "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, a popularity-by-region breakdown (worked out from their one overall popularity number and a fixed home region, not separately simulated), a funds/popularity trend chart once a few weeks of data exist, and their own Training Facility — every rival occasionally brings in a prospect of their own and, if they've hired a Trainer, trains them up the same way your Developmental system works. No manual promote step for them, though — a graduate moves to their main roster automatically.",
       "Freelancers aren't exclusive to anyone — the same wrestler could realistically get booked by a rival the same week you're eyeing them, so they're not always guaranteed available.",
       "A Working Agreement (available once a rival's within one tier of you) opens up their signed roster as guest talent on your own shows — not free, but a discounted loan fee well below a normal per-use rate. Either side can end it at any time.",
+      "Ratings (Menu > Ratings) ranks every show still on file — yours and every rival's — by estimated TV/PPV viewers. Nobody (rival or you, without a network deal) tracks real individual viewer counts, so it's worked out fresh from each company's popularity at the time and whichever network tier that would have actually qualified for.",
     ],
   },
   {
@@ -1945,6 +1960,7 @@ const SIDEBAR_SECTIONS = [
       { key: "promotions", label: "Promotions", icon: Globe2 },
       { key: "rankings", label: "Rankings", icon: TrendingUp },
       { key: "wrestlers", label: "Wrestlers", icon: UserPlus },
+      { key: "ratings", label: "Ratings", icon: BarChart3 },
     ],
   },
   {
@@ -7128,6 +7144,63 @@ export default function BookedRingsideEmpire() {
           );
         })()}
 
+        {tab === "ratings" && (() => {
+          const popularityAt = (companyId, atWeek) => {
+            const rows = rivalFinanceHistory.filter((h) => h.companyId === companyId && h.weekNumber <= atWeek);
+            if (rows.length > 0) return rows.reduce((best, r) => (r.weekNumber > best.weekNumber ? r : best)).popularity;
+            if (companyId === "player") return popularity;
+            return RIVAL_COMPANIES.find((c) => c.id === companyId)?.popularity ?? rivalCompanies.find((c) => c.id === companyId)?.popularity ?? 0;
+          };
+          const playerRows = showHistory.map((r) => {
+            const pop = popularityAt("player", r.weekNumber ?? r.showNumber);
+            const net = networkDeal || networkFor(pop);
+            const viewers = networkDeal ? Math.round(pop * networkDeal.viewerMult * (r.wasPPV ? 1.4 : 1)) : estimatedViewers(pop, r.wasPPV);
+            return { key: `p-${r.id}`, event: `${r.city} (${r.arena})`, promotion: companyName, network: net.name, type: r.wasPPV ? "PPV" : "TV", date: r.date, viewers };
+          });
+          const rivalRows = rivalShowHistory.map((r) => {
+            const pop = popularityAt(r.companyId, r.weekNumber);
+            const net = networkFor(pop);
+            return { key: `r-${r.id}`, event: `${r.companyName} Live Event`, promotion: r.companyName, network: net.name, type: r.wasPPV ? "PPV" : "TV", date: r.date, viewers: estimatedViewers(pop, r.wasPPV) };
+          });
+          const allRows = [...playerRows, ...rivalRows].sort((a, b) => b.viewers - a.viewers).slice(0, 100);
+          return (
+            <div>
+              <div className="text-[11px] tracking-widest text-[#8B6BC0] font-bold mb-1">RATINGS</div>
+              <div className="text-[10px] text-[#8B8593] mb-4">Every show still on file — yours and every rival's — ranked by estimated viewers. Viewers are worked out from each company's popularity at the time and whichever network tier that would have qualified for, not separately tracked per rival.</div>
+              {allRows.length === 0 ? (
+                <div className="text-xs text-[#8B8593] italic">Nothing to rank yet — run a few shows first.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="text-left text-[9px] text-[#8B8593] tracking-widest border-b border-[#2B2733]">
+                        <th className="py-2 pr-2">EVENT</th>
+                        <th className="py-2 pr-2">PROMOTION</th>
+                        <th className="py-2 pr-2">NETWORK</th>
+                        <th className="py-2 pr-2">TYPE</th>
+                        <th className="py-2 pr-2">DATE</th>
+                        <th className="py-2 pr-2 text-right">VIEWERS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allRows.map((r) => (
+                        <tr key={r.key} className="border-b border-[#17151C] hover:bg-[#131117]">
+                          <td className="py-1.5 pr-2 font-semibold">{r.event}</td>
+                          <td className="py-1.5 pr-2 text-[#8B8593]">{r.promotion}</td>
+                          <td className="py-1.5 pr-2 text-[#8B8593]">{r.network}</td>
+                          <td className="py-1.5 pr-2">{r.type === "PPV" && <span className="text-[#8B6BC0] font-bold">PPV</span>}{r.type === "TV" && <span className="text-[#8B8593]">TV</span>}</td>
+                          <td className="py-1.5 pr-2 text-[#8B8593]">{formatDate(r.date)}</td>
+                          <td className="py-1.5 pr-2 text-right font-bold booked-mono">{r.viewers.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {tab === "deals" && (
           <div className="flex flex-col dt:flex-row gap-5">
           <div className="flex-1 min-w-0 space-y-6 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-6 dt:items-start">
@@ -8819,6 +8892,7 @@ export default function BookedRingsideEmpire() {
                 { key: "deals", label: "Deals", desc: "TV networks & sponsors", icon: Tv },
                 { key: "merch", label: "Merchandise", desc: popularity >= MERCH_UNLOCK_POPULARITY ? `${merchStock} units in stock` : "Locked", icon: Ticket },
                 { key: "rankings", label: "Rankings", desc: "Top 10, singles & tag", icon: TrendingUp },
+                { key: "ratings", label: "Ratings", desc: "Every show, ranked by viewers", icon: BarChart3 },
                 { key: "news", label: "News", desc: "Everything happening", icon: Newspaper },
                 { key: "achievements", label: "Achievements", desc: `${unlockedAchievements.length}/${ACHIEVEMENTS.length} unlocked`, icon: Trophy },
                 { key: "halloffame", label: "Hall of Fame", desc: "Your best, all-time", icon: Star },
