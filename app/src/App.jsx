@@ -57,7 +57,11 @@ const TIER_ORDER = ["Jobber", "Lower Card", "Mid Card", "Upper Card", "Main Even
 // Exclusive signing only — a tiny promotion shouldn't be able to permanently
 // lock down a top-of-the-card star. Per-use is unrestricted; renting a big
 // name for one night stays realistic regardless of your size.
-const HIRE_TIER_CAP = { Unknown: "Mid Card", Local: "Upper Card", Regional: "Main Event", National: "Main Event", Global: null };
+// National was already effectively uncapped before Legend was removed as a
+// push tier (it capped at the old top rung, same as Global's explicit
+// null) — null here is that same behavior, just honest about it instead of
+// quietly duplicating Regional's cap.
+const HIRE_TIER_CAP = { Unknown: "Mid Card", Local: "Upper Card", Regional: "Main Event", National: null, Global: null };
 // Merchandise unlocks once you're an established enough draw for a stall to
 // be worth running. Stock persists — buy it upfront, sell it show after show
 // until it runs out, and restock proactively or leave demand unmet.
@@ -1840,7 +1844,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Staff (Menu) covers seven behind-the-scenes roles, each hired straight from a standing candidate pool — no bidding against yourself, just pick a candidate and offer a contract. Agent, Referee, and Assistant Booker all raise the ceiling your matches can realistically hit; Medical Staff cuts injury odds and shortens recovery; Ring Crew reduces the odds of a general company catastrophe (lawsuits, tax audits, scandals); Security does the same for crowd and venue incidents specifically (fights, barrier jumps, backstage breaches); Trainer speeds up how fast Developmental prospects close the gap to their potential. Only your single best hire per role counts — a second Agent doesn't stack with the first.",
       "Rivals aren't just sitting there — every non-acquired rival company competes for the exact same candidate pool, hiring and occasionally losing staff of their own over time. Anyone a rival's already snapped up shows up greyed out in your Candidates list rather than just vanishing, so you can see the competition for talent happening.",
-      "Once you've founded a Developmental feeder promotion (Back Office), its Promotions screen entry becomes a full Training School profile: your hired Trainer(s) by name, every current trainee's progress bar toward their potential, and an Alumni list of everyone who's actually graduated to your main roster.",
+      "Once you've founded a Developmental feeder promotion (Back Office), its Promotions screen entry becomes a full Training Facility profile: your hired Trainer(s) by name, every current trainee's progress bar toward their potential, and an Alumni list of everyone who's actually graduated to your main roster.",
     ],
   },
   {
@@ -6889,7 +6893,7 @@ export default function BookedRingsideEmpire() {
                 : null;
               return (
                 <div className="mt-4">
-                  <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">YOUR TRAINING SCHOOL</div>
+                  <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">YOUR TRAINING FACILITY</div>
                   <div className="bg-[#241B33] border border-[#5B3B8C] rounded-lg p-3 mb-3">
                     <div className="font-bold text-sm mb-1">{feederCompany.name}</div>
                     <div className="text-[10px] text-[#8B8593]">
