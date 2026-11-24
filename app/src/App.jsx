@@ -1862,7 +1862,7 @@ const GUIDE_SECTIONS = [
   {
     key: "promotions", title: "Promotions (Rivals)", icon: Globe2,
     body: [
-      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, a popularity-by-region breakdown (worked out from their one overall popularity number and a fixed home region, not separately simulated), and a funds/popularity trend chart once a few weeks of data exist.",
+      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, a popularity-by-region breakdown (worked out from their one overall popularity number and a fixed home region, not separately simulated), a funds/popularity trend chart once a few weeks of data exist, and their own Training Facility — every rival occasionally brings in a prospect of their own and, if they've hired a Trainer, trains them up the same way your Developmental system works. No manual promote step for them, though — a graduate moves to their main roster automatically.",
       "Freelancers aren't exclusive to anyone — the same wrestler could realistically get booked by a rival the same week you're eyeing them, so they're not always guaranteed available.",
       "A Working Agreement (available once a rival's within one tier of you) opens up their signed roster as guest talent on your own shows — not free, but a discounted loan fee well below a normal per-use rate. Either side can end it at any time.",
     ],
@@ -3690,6 +3690,19 @@ export default function BookedRingsideEmpire() {
           rivalPoolUpdates[w.name] = { contractedTo: co.id, contractExpiresWeek: weekNumber + 52 };
           rivalNewsEntries.push({ text: `${co.name} has signed ${w.name} to a new exclusive contract.`, companyId: co.id });
           signedNow = [...signedNow, w];
+          freelancers = freelancers.filter((x) => x.name !== w.name);
+        }
+
+        // Every rival runs its own Training School — a small independent
+        // chance each week to bring in a raw prospect, flagged developmental
+        // instead of main roster and trained up the same way the player's
+        // own Developmental system works (see the per-wrestler growth pass).
+        const prospectPool = freelancers.filter((w) => w.age <= 25 && potentialOf(w) - avgStats(w) >= 10);
+        if (Math.random() < 0.1 && prospectPool.length > 0) {
+          const w = prospectPool[rand(0, prospectPool.length - 1)];
+          rivalPoolUpdates[w.name] = { contractedTo: co.id, contractExpiresWeek: weekNumber + 52, rosterLevel: "developmental" };
+          rivalNewsEntries.push({ text: `${co.name} has brought in ${w.name} as a prospect for their training school.`, companyId: co.id });
+          signedNow = [...signedNow, w];
         }
 
         // A company that can't even cover this week's payroll makes an emergency
@@ -4165,6 +4178,7 @@ export default function BookedRingsideEmpire() {
       const legacyQueue = []; // retirees whose retirement rolled them a legacy child, debuting decades later
       const developmentBreakoutNames = []; // developmental talent that trained up to their potential this tick
       const developmentBreakoutRecords = []; // richer version of the above, for the Training School's Alumni list
+      const rivalGraduateNames = []; // rival trainees that graduated — auto-promoted since there's no manual Roster screen for them
       setPool((p) => {
         let next = p.map((w) => {
           const inMatch = matches.find((mm) => mm.format === "match" && (mm.team1.some((x) => x.name === w.name) || mm.team2.some((x) => x.name === w.name)));
@@ -4320,7 +4334,9 @@ export default function BookedRingsideEmpire() {
           // checked again at the very end of this wrestler's processing
           // (after aging etc.), so a crossing that a different same-week
           // mutation happens to complete still gets reported.
-          const inDevelopmental = aged.contractedTo === "player" && aged.rosterLevel === "developmental";
+          // Every company's Training School runs the same way, player and
+          // rival alike — just each with its own hired Trainer (or none).
+          const inDevelopmental = !!aged.contractedTo && aged.rosterLevel === "developmental";
           const wasBelowPotential = inDevelopmental && avgStats(aged) < potentialOf(aged) - 0.5;
           if (wasBelowPotential) {
             const pot = potentialOf(aged);
@@ -4335,10 +4351,11 @@ export default function BookedRingsideEmpire() {
               const opponent = darkMatchObj.a.name === aged.name ? darkMatchObj.b : darkMatchObj.a;
               workedWithVeteran = attrOf(opponent) - attrOf(aged) >= 20;
             }
-            const trainerChanceBonus = (bestTrainerSkill / 100) * 0.12;
+            const traineeTrainerSkill = aged.contractedTo === "player" ? bestTrainerSkill : staffPool.filter((s) => s.role === "trainer" && s.contractedTo === aged.contractedTo).reduce((max, s) => Math.max(max, s.skill), 0);
+            const trainerChanceBonus = (traineeTrainerSkill / 100) * 0.12;
             const chance = Math.min(0.97, (gotRingTime ? 0.85 : 0.5) + trainerChanceBonus);
             if (Math.random() < chance) {
-              const doubleChance = 0.4 + (bestTrainerSkill / 100) * 0.3;
+              const doubleChance = 0.4 + (traineeTrainerSkill / 100) * 0.3;
               let growCount = gotRingTime && Math.random() < doubleChance ? 2 : 1;
               if (workedWithVeteran) growCount += 1;
               growCount = Math.min(3, growCount);
@@ -4389,8 +4406,16 @@ export default function BookedRingsideEmpire() {
             }
           }
           if (wasBelowPotential && aged.rosterLevel === "developmental" && avgStats(aged) >= potentialOf(aged) - 0.5) {
-            developmentBreakoutNames.push(aged.name);
-            developmentBreakoutRecords.push({ name: aged.name, overall: Math.round(avgStats(aged)), tier: aged.tier });
+            developmentBreakoutRecords.push({ name: aged.name, overall: Math.round(avgStats(aged)), tier: aged.tier, companyId: aged.contractedTo });
+            if (aged.contractedTo === "player") {
+              developmentBreakoutNames.push(aged.name);
+            } else {
+              // No manual Roster screen for a rival's own trainees — graduate
+              // them onto the main roster automatically rather than leaving
+              // them stuck flagged developmental forever.
+              aged = { ...aged, rosterLevel: "main" };
+              rivalGraduateNames.push({ name: aged.name, companyId: aged.contractedTo });
+            }
           }
           return aged;
         });
@@ -4462,11 +4487,14 @@ export default function BookedRingsideEmpire() {
         if (developmentBreakoutNames.length > 0) {
           setUniverseFeed((feed) => [...developmentBreakoutNames.map((name, i) => ({ id: `dev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${name} has developed into a legitimate prospect — they've outgrown what Developmental can teach them and are ready for the main roster.`, type: "title", companyId: "player" })), ...feed].slice(0, 300));
         }
+        if (rivalGraduateNames.length > 0) {
+          setUniverseFeed((feed) => [...rivalGraduateNames.map((g, i) => ({ id: `rivaldev-${weekNumber}-${i}`, showNumber: weekNumber, date: scheduledDate, text: `${g.name} has graduated from ${rivalCompanies.find((c) => c.id === g.companyId)?.name || "a rival's"} training school onto their main roster.`, type: "rival", companyId: g.companyId })), ...feed].slice(0, 300));
+        }
         if (developmentBreakoutRecords.length > 0) {
           setDevelopmentalAlumni((al) => [
             ...developmentBreakoutRecords.map((r) => ({ ...r, graduatedWeek: weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber) })),
             ...al,
-          ].slice(0, 100));
+          ].slice(0, 300));
         }
         return next;
       });
@@ -6909,6 +6937,54 @@ export default function BookedRingsideEmpire() {
                     </div>
                   </div>
                 ) : null;
+              })()}
+              {(() => {
+                const rivalTrainees = pool.filter((w) => w.contractedTo === co.id && w.rosterLevel === "developmental");
+                const rivalTrainers = staffPool.filter((s) => s.role === "trainer" && s.contractedTo === co.id);
+                const rivalAlumni = developmentalAlumni.filter((a) => (a.companyId || "player") === co.id);
+                if (rivalTrainees.length === 0 && rivalTrainers.length === 0 && rivalAlumni.length === 0) return null;
+                const rivalBestTrainerSkill = rivalTrainers.reduce((max, s) => Math.max(max, s.skill), 0);
+                const perShowGain = (Math.min(0.97, 0.5 + (rivalBestTrainerSkill / 100) * 0.12) * (1 + (0.4 + (rivalBestTrainerSkill / 100) * 0.3)) * 2) / 10;
+                return (
+                  <div className="mb-3">
+                    <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">{co.name.toUpperCase()} TRAINING FACILITY</div>
+                    <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3 space-y-2">
+                      <div className="text-[10px] text-[#8B8593]">
+                        {rivalTrainers.length > 0 ? <>Trainer{rivalTrainers.length === 1 ? "" : "s"}: <span className="text-[#F2ECDD] font-semibold">{rivalTrainers.map((t) => `${t.name} (${t.skill})`).join(", ")}</span></> : <span className="italic">No Trainer hired yet.</span>}
+                      </div>
+                      {rivalTrainees.length > 0 && (
+                        <div className="space-y-1.5">
+                          {rivalTrainees.map((w) => {
+                            const pot = Math.round(potentialOf(w));
+                            const cur = Math.round(avgStats(w));
+                            const pct = Math.min(100, Math.round((cur / Math.max(1, pot)) * 100));
+                            const gap = Math.max(0, pot - cur);
+                            const eta = gap <= 0.5 ? 0 : Math.max(1, Math.ceil(gap / perShowGain));
+                            return (
+                              <div key={w.name} className="bg-[#131117] rounded-lg p-2">
+                                <div className="flex justify-between text-[10px] mb-0.5"><span className="font-semibold">{w.name}</span><span className="text-[#8B8593]">Potential {pot}</span></div>
+                                <div className="h-1 bg-[#0A0A0C] rounded-full overflow-hidden"><div className="h-full bg-[#8B6BC0]" style={{ width: `${pct}%` }} /></div>
+                                <div className="text-[9px] text-[#8B8593] mt-0.5">{eta > 0 ? `~${eta} more show${eta === 1 ? "" : "s"} if kept booked every time` : "Ready to graduate any show now"}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {rivalAlumni.length > 0 && (
+                        <div>
+                          <div className="text-[9px] text-[#8B8593] font-bold mb-1">ALUMNI</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {rivalAlumni.map((a, i) => (
+                              <span key={`${a.name}-${a.graduatedWeek}-${i}`} className="text-[11px] bg-[#131117] border border-[#2B2733] rounded-full px-2 py-1" title={`Graduated Y${a.year} Wk${a.weekOfYear} at ${a.overall} overall (${a.tier})`}>
+                                {a.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
               })()}
 
               <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">SIGNED ROSTER ({signedRoster.length}) BY CARD POSITION</div>
