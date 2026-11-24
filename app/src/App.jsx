@@ -1919,7 +1919,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Achievements (Menu > Achievements) are lifetime — 37 of them, covering company growth, roster building, finance, titles, merchandise, and more. They persist even if you retire and start a fresh promotion; only a full progress wipe clears them.",
       "Hall of Fame (Menu > Hall of Fame) tracks your best-ever match, biggest-ever show, and longest-ever title reign — and shows the best any rival has ever managed in each, side by side, so you can see if anyone's actually beaten you.",
-      "Awards (Menu > Awards) hands out seven categories for whichever year you pick — Match, Angle, Wrestler, Men's Wrestler, Women's Wrestler, Promotion, and Show of the Year — worked out fresh from your Results history and weekly popularity snapshots rather than tracked as a running record, so it only covers shows and weeks still on file.",
+      "Awards (Menu > Awards) hands out seven categories for whichever year you pick — Match, Angle, Wrestler, Men's Wrestler, Women's Wrestler, Promotion, and Show of the Year — worked out fresh from your Results history, rival show activity, and weekly popularity snapshots rather than tracked as a running record, so it only covers shows and weeks still on file. Every category spans the whole wrestling world, you and every rival alike, except Angle of the Year — only your own promotion ever runs angles, so that one stays yours alone.",
     ],
   },
   {
@@ -4657,6 +4657,7 @@ export default function BookedRingsideEmpire() {
     })),
     financeHistory: financeHistory.slice(-300),
     rivalFinanceHistory: rivalFinanceHistory.slice(-1600),
+    rivalShowHistory: rivalShowHistory.slice(0, 150),
     universeFeed: universeFeed.slice(0, 150),
     storylines, stableStorylines, stables,
     networkDeal, networkOffers, sponsorDeal, sponsorOffers,
@@ -4688,6 +4689,7 @@ export default function BookedRingsideEmpire() {
     setTitles(s.titles || [{ id: "world", name: "World Championship", type: "singles", holders: [], reignStartWeek: null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] }]);
     // Dates survive JSON as strings, not Date objects — rebuild them so formatDate() still works.
     setShowHistory((s.showHistory || []).map((r) => ({ ...r, date: new Date(r.date) })));
+    setRivalShowHistory((s.rivalShowHistory || []).map((r) => ({ ...r, date: new Date(r.date) })));
     setFinanceHistory(s.financeHistory || [{ weekNumber: 0, year: 1, weekOfYear: 0, bank: s.bank ?? 20000 }]);
     setRivalFinanceHistory(s.rivalFinanceHistory || []);
     setUniverseFeed((s.universeFeed || []).map((item) => ({ ...item, date: new Date(item.date) })));
@@ -8691,26 +8693,48 @@ export default function BookedRingsideEmpire() {
         )}
 
         {tab === "awards" && (() => {
-          const awardsYearsAvailable = [...new Set(showHistory.map((r) => r.year))].sort((a, b) => b - a);
+          const awardsYearsAvailable = [...new Set([...showHistory.map((r) => r.year), ...rivalShowHistory.map((r) => r.year)])].sort((a, b) => b - a);
           const effectiveAwardsYear = awardsYear ?? (awardsYearsAvailable[0] ?? currentYear);
           const yearShows = showHistory.filter((r) => r.year === effectiveAwardsYear);
-          const allMatches = yearShows.flatMap((r) => r.matches.filter((m) => m.format === "match").map((m) => ({ ...m, showDate: r.date, showCity: r.city })));
+          const rivalYearShows = rivalShowHistory.filter((r) => r.year === effectiveAwardsYear);
+          // Everything below is world-wide, not just your own card — Promotion
+          // of the Year already pulled from every company's popularity, and
+          // Match/Wrestler/Show of the Year now draw from rival shows too.
+          // Angles are the one exception: rivals never run them, only matches,
+          // so Angle of the Year only ever has your own promos to rank.
+          const playerMatches = yearShows.flatMap((r) => r.matches.filter((m) => m.format === "match").map((m) => {
+            const allNames = [...m.team1, ...(m.team2 || [])].map((w) => w.name);
+            return {
+              rating: m.rating, companyName, date: r.date, city: r.city,
+              participants: allNames.join(m.team2?.length ? " vs " : ", "), allNames,
+              winnerNames: (m.winnerTeam || []).map((w) => w.name),
+              titleChange: !!(m.titleInfo && !m.titleInfo.defended),
+            };
+          }));
+          const rivalMatches = rivalYearShows.flatMap((r) => r.matches.map((m) => ({
+            rating: m.rating, companyName: r.companyName, date: r.date, city: null,
+            participants: `${m.a} vs ${m.b}`, allNames: [m.a, m.b], winnerNames: [m.winner], titleChange: false,
+          })));
+          const allMatches = [...playerMatches, ...rivalMatches];
           const allAngles = yearShows.flatMap((r) => r.matches.filter((m) => m.format === "segment").map((m) => ({ ...m, showDate: r.date, showCity: r.city })));
           const topMatches = [...allMatches].sort((a, b) => b.rating - a.rating).slice(0, 3);
           const topAngles = [...allAngles].sort((a, b) => b.rating - a.rating).slice(0, 3);
-          const showOfYear = yearShows.length > 0 ? [...yearShows].sort((a, b) => b.fullRating - a.fullRating)[0] : null;
+          const playerShowRows = yearShows.map((r) => ({ companyName, rating: r.fullRating, date: r.date, label: `${r.city} (${r.arena})` }));
+          const rivalShowRows = rivalYearShows.map((r) => ({ companyName: r.companyName, rating: Math.round(r.matches.reduce((s, m) => s + m.rating, 0) / Math.max(1, r.matches.length)), date: r.date, label: r.companyName }));
+          const allShows = [...playerShowRows, ...rivalShowRows];
+          const showOfYear = allShows.length > 0 ? [...allShows].sort((a, b) => b.rating - a.rating)[0] : null;
           // A simple, transparent score — not a hidden formula: every match or
-          // angle you were part of adds its rating, winning a match adds a flat
-          // bonus, and winning or capturing gold on top of that adds more. Highest
+          // angle a wrestler was part of adds its rating, winning a match adds
+          // a flat bonus, and a title change on top of that adds more. Highest
           // total for the year takes it, same way a real end-of-year poll would
           // weigh "worked a lot of good matches" against "actually won things."
           const wrestlerScores = {};
           const bump = (name, amt) => { wrestlerScores[name] = (wrestlerScores[name] || 0) + amt; };
           allMatches.forEach((m) => {
-            [...(m.team1 || []), ...(m.team2 || [])].forEach((w) => bump(w.name, m.rating));
-            (m.winnerTeam || []).forEach((w) => {
-              bump(w.name, 15);
-              if (m.titleInfo && !m.titleInfo.defended) bump(w.name, 25);
+            m.allNames.forEach((name) => bump(name, m.rating));
+            m.winnerNames.forEach((name) => {
+              bump(name, 15);
+              if (m.titleChange) bump(name, 25);
             });
           });
           allAngles.forEach((m) => { if (m.performer) bump(m.performer.name, Math.round(m.rating * 0.5)); });
@@ -8749,8 +8773,8 @@ export default function BookedRingsideEmpire() {
             <div key={i} className="bg-[#131117] rounded-lg p-3 flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-[9px] text-[#8B8593]">{i + 1}.</div>
-                <div className="text-xs font-bold text-[#F2ECDD] truncate">{[...m.team1, ...(m.team2 || [])].map((w) => w.name).join(m.team2?.length ? " vs " : ", ")}</div>
-                <div className="text-[10px] text-[#8B8593] mt-0.5">{formatDate(m.showDate)} &middot; {m.showCity}</div>
+                <div className="text-xs font-bold text-[#F2ECDD] truncate">{m.participants}</div>
+                <div className="text-[10px] text-[#8B8593] mt-0.5">{m.companyName}{m.city ? ` · ${m.city}` : ""} &middot; {formatDate(m.date)}</div>
               </div>
               <div className="shrink-0 flex items-center gap-1 text-xs text-[#8B6BC0] font-bold"><Star size={12} />{m.rating}</div>
             </div>
@@ -8778,7 +8802,7 @@ export default function BookedRingsideEmpire() {
                   {awardsYearsAvailable.map((y) => <option key={y} value={y}>Year {y}</option>)}
                 </select>
               </div>
-              <div className="text-[10px] text-[#8B8593] mb-4">End-of-year honors for {companyName}, based on every show run that year. Only covers shows still in your Results history.</div>
+              <div className="text-[10px] text-[#8B8593] mb-4">End-of-year honors across the whole wrestling world — your shows and every rival's — for whichever year you pick. Angle of the Year is the one exception: only your own promotion runs angles, so that category is yours alone. Only covers shows still on file (Results/rival activity history).</div>
               <div className="flex flex-col dt:flex-row gap-4">
                 <div className="dt:w-56 shrink-0 flex dt:flex-col flex-wrap gap-1.5">
                   {CATEGORIES.map((c) => (
@@ -8798,8 +8822,8 @@ export default function BookedRingsideEmpire() {
                   ) : <div className="text-xs text-[#8B8593] italic">Not enough of the year has played out yet to measure growth.</div>)}
                   {awardsCategory === "show" && (showOfYear ? (
                     <div className="bg-[#131117] rounded-lg p-3 text-xs">
-                      <div className="text-[#F2ECDD] font-bold">Y{showOfYear.year} Wk{showOfYear.weekOfYear} &middot; {showOfYear.city} ({showOfYear.arena})</div>
-                      <div className="text-[#8B8593] mt-0.5 flex items-center gap-1"><Star size={12} className="text-[#8B6BC0]" />{showOfYear.fullRating} rating &middot; {formatDate(showOfYear.date)}</div>
+                      <div className="text-[#F2ECDD] font-bold">{showOfYear.companyName}{showOfYear.label !== showOfYear.companyName ? ` — ${showOfYear.label}` : ""}</div>
+                      <div className="text-[#8B8593] mt-0.5 flex items-center gap-1"><Star size={12} className="text-[#8B6BC0]" />{showOfYear.rating} rating &middot; {formatDate(showOfYear.date)}</div>
                     </div>
                   ) : <div className="text-xs text-[#8B8593] italic">No shows run this year yet.</div>)}
                 </div>
