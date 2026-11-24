@@ -1975,6 +1975,7 @@ export default function BookedRingsideEmpire() {
   const [view, setView] = useState("menu");
   const [menuLoadOpen, setMenuLoadOpen] = useState(false);
   const [menuSettingsOpen, setMenuSettingsOpen] = useState(false);
+  const [menuNewGameOpen, setMenuNewGameOpen] = useState(false);
   // Achievement tracking — lifetime flags for events that don't leave a lasting
   // trace in ongoing state (a loan gets repaid, a catastrophe happens once, etc).
   const [unlockedAchievements, setUnlockedAchievements] = useState([]); // [{id, unlockedAtWeek}]
@@ -4861,6 +4862,85 @@ export default function BookedRingsideEmpire() {
   })();
   const continueGame = () => { if (newestSave) { applySaveSnapshot(newestSave); setView("game"); } };
   const startNewGameFromMenu = () => { resetGame(); setView("game"); };
+  // Take over an existing rival company instead of starting a brand new
+  // small promotion — inherits its starting roster (from ROSTER_DATA's
+  // promo assignments), funds, and reputation. Built as one self-contained
+  // pass rather than resetGame() + follow-up tweaks: chaining more setState
+  // calls after resetGame() in the same handler would read its own stale
+  // pre-reset closures (pool, rivalCompanies, etc. don't update until the
+  // next render), so every piece here is computed locally first.
+  const takeOverCompanyFromMenu = (co) => {
+    const freshPool = buildInitialPool(); // also (re)populates _initialChampions as a side effect
+    const rivalIdx = RIVAL_COMPANIES.findIndex((c) => c.id === co.id);
+    const startingFunds = RIVAL_STARTING_FUNDS[rivalIdx] ?? 25000;
+    const transferredPool = freshPool.map((w) => (w.contractedTo === co.id ? { ...w, contractedTo: "player", contractExpiresWeek: 53 } : w));
+    const freshStaff = buildStaffPool().map((s) => (s.contractedTo === co.id ? { ...s, contractedTo: "player" } : s));
+    const remainingRivals = RIVAL_COMPANIES.filter((c) => c.id !== co.id).map((c, i) => ({ ...c, funds: RIVAL_STARTING_FUNDS[RIVAL_COMPANIES.indexOf(c)] ?? 25000, showsRun: 0, lastTier: popularityTier(c.popularity) }));
+    const remainingRivalTitles = RIVAL_COMPANIES.filter((c) => c.id !== co.id).map((c) => ({ id: `${c.id}-title`, name: c.titleName, companyId: c.id, holder: _initialChampions[c.id] || null }));
+    // Seed enough visited cities (at the company's own popularity level) that
+    // the city-diversity cap doesn't immediately clip their inherited
+    // reputation down — see popularity/cityDiversityCap below.
+    const citiesNeeded = co.popularity <= 15 ? 1 : Math.min(CITIES.length, Math.ceil((co.popularity - 15) / 14) + 1);
+    const seededCities = CITIES.slice(0, citiesNeeded);
+    const champion = _initialChampions[co.id] || null;
+
+    setBank(startingFunds);
+    setWeekCount(1);
+    setTotalShowsRun(0);
+    setTotalMatchesRun(0);
+    setCompanyName(co.name);
+    setPlayerName(co.bookerName); setPlayerAge(""); setPlayerSex("");
+    setCityPopularity({ ...Object.fromEntries(CITIES.map((c) => [c, 0])), ...Object.fromEntries(seededCities.map((c) => [c, co.popularity])) });
+    setCityVisits({ ...Object.fromEntries(CITIES.map((c) => [c, 0])), ...Object.fromEntries(seededCities.map((c) => [c, 1])) });
+    setPool(transferredPool);
+    setRivalCompanies(remainingRivals);
+    setPlayerLastTier(popularityTier(co.popularity));
+    setRivalTitles(remainingRivalTitles);
+    setNextReserveIndex(BULK_DEBUT_COUNT);
+    setNextStaggeredDebutIndex(0);
+    setPerUseRoster([]);
+    setTitles([{ id: "world", name: co.titleName, type: "singles", holders: champion ? [champion] : [], reignStartWeek: champion ? 1 : null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] }]);
+    setShowHistory([]);
+    setRivalShowHistory([]);
+    setRivalFinanceHistory([]);
+    setFinanceHistory([{ weekNumber: 0, year: 1, weekOfYear: 0, bank: startingFunds }]);
+    setUniverseFeed([{ id: "takeover-1", showNumber: 1, date: new Date(), text: `${co.name} has new ownership — fresh leadership takes the reins.`, type: "title", companyId: "player" }]);
+    setStorylines({});
+    setStables(PRESET_STABLES.map((s, i) => ({ id: `preset-stable-${i}`, name: s.name, members: s.members, matches: 0, wins: 0, losses: 0, rivalStableIds: [] })));
+    setStableStorylines({});
+    setShowResult(null);
+    setNetworkDeal(null); setNetworkOffers([]);
+    setSponsorDeal(null); setSponsorOffers([]);
+    setBankruptWeeks(0);
+    setLoan(null);
+    setRequests([]);
+    setPeakPopularity(co.popularity);
+    setArenaIdx(1);
+    setShowMinutesTarget(ARENAS[1].showMinutes);
+    setCity(null);
+    setStartingCity(seededCities[0] || null);
+    setMerchStock(0); setMerchQualityTier(0); setWrestlerMerchSales({});
+    setRecentMatchups([]);
+    setScheduledEvents([]);
+    setEventTemplates([]);
+    setWorkingAgreements([]);
+    setFeederCompany(null);
+    setDevelopmentalAlumni([]);
+    setProductionTier(0);
+    setFanTrendKey(FAN_TRENDS[rand(0, FAN_TRENDS.length - 1)].key);
+    setPendingLegacies([]);
+    setPendingOffers([]);
+    setShortlist([]);
+    setShowsDoneThisWeek([]);
+    setStaffPool(freshStaff);
+    setSegments([]);
+    setDarkMatches([]);
+    setNotes("");
+    setTab("company");
+    setGameOver(false);
+    setMenuNewGameOpen(false);
+    setView("game");
+  };
   const loadSaveFromMenu = async (which) => {
     if (which === "manual") await loadGame(); else await loadAutoSave();
     setView("game");
@@ -5291,8 +5371,25 @@ export default function BookedRingsideEmpire() {
                 CONTINUE — {newestSave.companyName}
               </button>
             )}
-            <button onClick={startNewGameFromMenu} className={menuButtonClass}>NEW GAME</button>
-            <button onClick={() => { setMenuLoadOpen((o) => !o); setMenuSettingsOpen(false); }} className={menuButtonClass}>LOAD GAME</button>
+            <button onClick={() => { setMenuNewGameOpen((o) => !o); setMenuLoadOpen(false); setMenuSettingsOpen(false); }} className={menuButtonClass}>NEW GAME</button>
+            {menuNewGameOpen && (
+              <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-3 space-y-2">
+                <button onClick={startNewGameFromMenu} className="w-full py-2.5 rounded-lg font-bold text-xs border border-[#5B3B8C] text-[#8B6BC0] hover:bg-[#241B33]">
+                  Start Fresh — a brand new small promotion
+                </button>
+                <div className="text-[9px] text-[#8B8593] tracking-widest font-bold pt-1">OR TAKE OVER AN EXISTING PROMOTION</div>
+                {RIVAL_COMPANIES.map((co, i) => (
+                  <button key={co.id} onClick={() => takeOverCompanyFromMenu(co)} className="w-full text-left px-3 py-2 rounded-lg border border-[#2B2733] hover:border-[#5B3B8C] transition-colors">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold">{co.name}</span>
+                      <span className="text-[10px] text-[#8B8593]">{popularityTier(co.popularity)} ({co.popularity})</span>
+                    </div>
+                    <div className="text-[10px] text-[#8B8593] mt-0.5">Booker: {co.bookerName} &middot; Starting funds £{(RIVAL_STARTING_FUNDS[i] ?? 25000).toLocaleString()}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button onClick={() => { setMenuLoadOpen((o) => !o); setMenuSettingsOpen(false); setMenuNewGameOpen(false); }} className={menuButtonClass}>LOAD GAME</button>
             {menuLoadOpen && (
               <div className="bg-[#131117] border border-[#2B2733] rounded-lg p-3 space-y-2">
                 {saveInfo ? (
@@ -5310,7 +5407,7 @@ export default function BookedRingsideEmpire() {
               </div>
             )}
             <button onClick={openWorldEditorFromMenu} className={menuButtonClass}>WORLD EDITOR</button>
-            <button onClick={() => { setMenuSettingsOpen((o) => !o); setMenuLoadOpen(false); }} className={menuButtonClass}>SETTINGS</button>
+            <button onClick={() => { setMenuSettingsOpen((o) => !o); setMenuLoadOpen(false); setMenuNewGameOpen(false); }} className={menuButtonClass}>SETTINGS</button>
             {menuSettingsOpen && (
               <div className="bg-[#2A1414] border border-red-500 rounded-lg p-3">
                 <div className="text-[10px] text-red-200 mb-2">Wipes your save, autosave, and entire Previous Games history. There is no undo.</div>
