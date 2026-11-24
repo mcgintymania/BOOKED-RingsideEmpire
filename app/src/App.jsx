@@ -307,6 +307,56 @@ function angleResultText(m) {
   return `${m.performer.name} cuts a promo${m.subject ? ` aimed at ${m.subject.name}` : ""}.`;
 }
 
+// News items are built at the moment they happen from a single flat fact
+// (a release, an injury, a title change) — true, but thin as a sentence on
+// its own. Rather than rewriting every one of those call sites, a second
+// line of flavor commentary is tacked on at display time, picked
+// deterministically from a small per-type pool so a given story reads the
+// same way every time it's shown, without ever touching the underlying fact.
+const NEWS_FLAVOR = {
+  title: [
+    "The locker room's already talking about what it means for the rest of the card.",
+    "It's the kind of moment that can define a wrestler's whole year.",
+    "Cameras lingered on the reaction — this one's going to get talked about for a while.",
+    "Fans online are already debating who's next in line.",
+    "Whether it was the right call or not, it's made the whole roster sit up.",
+    "Expect this to be the lead story on every wrestling podcast this week.",
+  ],
+  injury: [
+    "The medical team is calling it a case of wait-and-see for now.",
+    "It's a tough blow to absorb with the schedule as packed as it is.",
+    "Nobody likes seeing a run interrupted like this.",
+    "The locker room's sending well wishes for a full recovery.",
+    "It leaves a real gap to fill until they're back.",
+    "These things have a way of reshaping the next few months of booking.",
+  ],
+  rival: [
+    "Keep an eye on how the rest of the wrestling world reacts to this one.",
+    "It's a reminder that the competition for eyeballs never really stops.",
+    "Whether it pays off remains to be seen.",
+    "Industry watchers are split on whether it was the right move.",
+    "It's the kind of story that ripples well beyond just one promotion.",
+    "The rest of the business will be watching closely.",
+  ],
+  rumor: [
+    "Take it with a grain of salt until it's confirmed either way.",
+    "The dirt sheets have been buzzing about this one all week.",
+    "Whether there's anything to it is anyone's guess right now.",
+    "It's the kind of story that tends to take on a life of its own.",
+    "Insiders say there's more to come on this one.",
+    "For now, it's just talk — but talk has a way of becoming true in this business.",
+  ],
+};
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function flavorizeNews(item) {
+  const pool = NEWS_FLAVOR[item.type] || NEWS_FLAVOR.rumor;
+  return `${item.text} ${pool[hashStr(String(item.id)) % pool.length]}`;
+}
+
 // Dark matches: an optional, unrated 1v1 before or after the card proper —
 // doesn't touch the time budget, the show rating, or win/loss records, just
 // gets an off-card body some reps (a small shot at a stat/training bump and
@@ -1302,6 +1352,24 @@ const RIVAL_SHOW_MINUTES = { Unknown: 30, Local: 45, Regional: 60, National: 90,
 function rivalShowMinutes(popularity) {
   return RIVAL_SHOW_MINUTES[popularityTier(popularity)];
 }
+// Region popularity bars — derived, not separately simulated: no per-region
+// history is tracked, so this is worked out fresh each render from the one
+// popularity number every rival already has plus a fixed home region. A
+// bigger promotion's reach bleeds further outside its home turf; a small
+// one barely registers anywhere else, same as the player's own city-by-city
+// growth is capped by overall reputation.
+const REGIONS = ["North America", "Latin America", "Europe", "Asia", "Oceania", "Africa"];
+const RIVAL_HOME_REGION = {
+  apex: "North America", steelcity: "North America", coastal: "North America",
+  ironclad: "Europe", northerngrit: "Europe",
+  redline: "Asia", undergroundbrawl: "Oceania", backlot: "Latin America",
+};
+function regionPopularity(co) {
+  const home = RIVAL_HOME_REGION[co.id] || "North America";
+  const tier = popularityTier(co.popularity);
+  const bleedFrac = tier === "Global" ? 0.6 : tier === "National" ? 0.3 : tier === "Regional" ? 0.1 : 0;
+  return Object.fromEntries(REGIONS.map((r) => [r, Math.round(r === home ? co.popularity : (co.popularity * bleedFrac) / (REGIONS.length - 1))]));
+}
 // Founding a developmental feeder promotion is a real investment, not a free
 // toggle — building out a training facility and a second roster costs more
 // the bigger you already are.
@@ -1794,7 +1862,7 @@ const GUIDE_SECTIONS = [
   {
     key: "promotions", title: "Promotions (Rivals)", icon: Globe2,
     body: [
-      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, and a funds/popularity trend chart once a few weeks of data exist.",
+      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, a popularity-by-region breakdown (worked out from their one overall popularity number and a fixed home region, not separately simulated), and a funds/popularity trend chart once a few weeks of data exist.",
       "Freelancers aren't exclusive to anyone — the same wrestler could realistically get booked by a rival the same week you're eyeing them, so they're not always guaranteed available.",
       "A Working Agreement (available once a rival's within one tier of you) opens up their signed roster as guest talent on your own shows — not free, but a discounted loan fee well below a normal per-use rate. Either side can end it at any time.",
     ],
@@ -1827,7 +1895,7 @@ const GUIDE_SECTIONS = [
   {
     key: "news", title: "News", icon: Newspaper,
     body: [
-      "Everything happening across the wrestling world — your title changes, rival hires and crownings, injuries, and locker-room rumours (friendships, rivalries, relationships) — lands here. The most recent item also shows as a small icon in the header with a red dot, so you don't have to go looking for it.",
+      "Everything happening across the wrestling world — your title changes, rival hires and crownings, injuries, and locker-room rumours (friendships, rivalries, relationships) — lands here. The most recent item also shows as a small icon in the header with a red dot, so you don't have to go looking for it. Every item also gets a line of color commentary tacked on — flavor only, picked from a small pool per story type, not a separate fact.",
       "Filter by promotion, year, or week to cut through the noise once you've been playing a while.",
     ],
   },
@@ -1836,7 +1904,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Achievements (Menu > Achievements) are lifetime — 37 of them, covering company growth, roster building, finance, titles, merchandise, and more. They persist even if you retire and start a fresh promotion; only a full progress wipe clears them.",
       "Hall of Fame (Menu > Hall of Fame) tracks your best-ever match, biggest-ever show, and longest-ever title reign — and shows the best any rival has ever managed in each, side by side, so you can see if anyone's actually beaten you.",
-      "Awards (Menu > Awards) hands out Wrestler, Match, and Angle of the Year for whichever year you pick, worked out fresh from your Results history rather than tracked as a running record — so it only covers shows still listed there.",
+      "Awards (Menu > Awards) hands out seven categories for whichever year you pick — Match, Angle, Wrestler, Men's Wrestler, Women's Wrestler, Promotion, and Show of the Year — worked out fresh from your Results history and weekly popularity snapshots rather than tracked as a running record, so it only covers shows and weeks still on file.",
     ],
   },
   {
@@ -1986,6 +2054,7 @@ export default function BookedRingsideEmpire() {
   const [bookSubTab, setBookSubTab] = useState("book");
   const [resultsYearFilter, setResultsYearFilter] = useState("all");
   const [awardsYear, setAwardsYear] = useState(null);
+  const [awardsCategory, setAwardsCategory] = useState("match");
   const [resultsCompanyFilter, setResultsCompanyFilter] = useState("player");
   const [detailWrestler, setDetailWrestler] = useState(null);
   const [expandedResults, setExpandedResults] = useState(() => new Set());
@@ -3690,8 +3759,9 @@ export default function BookedRingsideEmpire() {
       // charts on their profile, same idea as the player's own financeHistory.
       setRivalFinanceHistory((h) => [
         ...h,
+        { companyId: "player", weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), funds: bank, popularity },
         ...newRivalCompanies.filter((co) => !co.acquired).map((co) => ({ companyId: co.id, weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), funds: co.funds, popularity: co.popularity })),
-      ].slice(-1600));
+      ].slice(-2000));
       if (Object.keys(rivalPoolUpdates).length > 0) setPool((p) => p.map((w) => (rivalPoolUpdates[w.name] ? { ...w, ...rivalPoolUpdates[w.name] } : w)));
       if (Object.keys(rivalStaffUpdates).length > 0) setStaffPool((sp) => sp.map((s) => (rivalStaffUpdates[s.id] ? { ...s, ...rivalStaffUpdates[s.id] } : s)));
       const rivalReignCandidates = [];
@@ -5601,7 +5671,7 @@ export default function BookedRingsideEmpire() {
                               {item.type === "injury" && <Skull size={11} className="text-red-400" />}
                               <span>Y{yearOf(item.showNumber)} Wk{weekOfYear(item.showNumber)} &middot; {formatDate(item.date)}</span>
                             </div>
-                            <div className={`text-xs ${item.type === "title" ? "text-[#F2ECDD] font-semibold" : item.type === "injury" ? "text-red-300 font-semibold" : "text-[#CFC9BB]"}`}>{item.text}</div>
+                            <div className={`text-xs ${item.type === "title" ? "text-[#F2ECDD] font-semibold" : item.type === "injury" ? "text-red-300 font-semibold" : "text-[#CFC9BB]"}`}>{flavorizeNews(item)}</div>
                           </div>
                         ))}
                       </div>
@@ -6649,6 +6719,18 @@ export default function BookedRingsideEmpire() {
               const trainees = roster.filter((w) => w.rosterLevel === "developmental");
               const avgRating = feederShows.length ? Math.round(feederShows.reduce((s, r) => s + r.fullRating, 0) / feederShows.length) : 0;
               const trainers = staffPool.filter((s) => s.role === "trainer" && s.contractedTo === "player");
+              // A rough, clearly-labeled ETA — not a promise — mirroring the real
+              // weekly training-roll odds (see the aging/training pass in runShow):
+              // chance of a hit, how many stats move on a hit, averaged per show,
+              // assuming they're actually kept on the card every time out.
+              const perShowGain = (Math.min(0.97, 0.85 + (bestTrainerSkill / 100) * 0.12) * (1 + (0.4 + (bestTrainerSkill / 100) * 0.3)) * 2) / 10;
+              const traineeETA = (w) => {
+                const gap = Math.max(0, potentialOf(w) - avgStats(w));
+                return gap <= 0.5 ? 0 : Math.max(1, Math.ceil(gap / perShowGain));
+              };
+              const nextGraduation = trainees.length > 0
+                ? [...trainees].map((w) => ({ name: w.name, eta: traineeETA(w) })).sort((a, b) => a.eta - b.eta)[0]
+                : null;
               return (
                 <div className="mt-4">
                   <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-2">YOUR TRAINING SCHOOL</div>
@@ -6657,6 +6739,9 @@ export default function BookedRingsideEmpire() {
                     <div className="text-[10px] text-[#8B8593]">
                       Founded Y{yearOf(feederCompany.foundedWeek)} Wk{weekOfYear(feederCompany.foundedWeek)} &middot; Trainees: {trainees.length} &middot; Shows run: {feederShows.length} &middot; Avg. rating: {avgRating}
                     </div>
+                    {nextGraduation && (
+                      <div className="text-[10px] text-[#8B8593] mt-1">Next Graduation: <span className="text-[#F2ECDD] font-semibold">{nextGraduation.name}</span>{nextGraduation.eta > 0 ? <> — ~{nextGraduation.eta} more show{nextGraduation.eta === 1 ? "" : "s"} if kept booked every time</> : <> — any show now</>}</div>
+                    )}
                     <div className="text-[10px] text-[#8B8593] mt-1">
                       {trainers.length > 0 ? <>Trainer{trainers.length === 1 ? "" : "s"}: <span className="text-[#F2ECDD] font-semibold">{trainers.map((t) => `${t.name} (${t.skill})`).join(", ")}</span></> : <span className="italic">No Trainer hired yet — one on Staff raises every trainee's odds of closing the gap each week.</span>}
                     </div>
@@ -6671,10 +6756,12 @@ export default function BookedRingsideEmpire() {
                           const pot = Math.round(potentialOf(w));
                           const cur = Math.round(avgStats(w));
                           const pct = Math.min(100, Math.round((cur / Math.max(1, pot)) * 100));
+                          const eta = traineeETA(w);
                           return (
                             <div key={w.name} className="bg-[#131117] rounded-lg p-2">
                               <div className="flex justify-between text-[10px] mb-0.5"><span className="font-semibold">{w.name}</span><span className="text-[#8B8593]">Potential {pot}</span></div>
                               <div className="h-1 bg-[#0A0A0C] rounded-full overflow-hidden"><div className="h-full bg-[#8B6BC0]" style={{ width: `${pct}%` }} /></div>
+                              <div className="text-[9px] text-[#8B8593] mt-0.5">{eta > 0 ? `~${eta} more show${eta === 1 ? "" : "s"} if kept booked every time` : "Ready to graduate any show now"}</div>
                             </div>
                           );
                         })}
@@ -6774,6 +6861,23 @@ export default function BookedRingsideEmpire() {
                   </div>
                 </>
               )}
+              {(() => {
+                const regions = regionPopularity(co);
+                return (
+                  <div className="mb-3">
+                    <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">POPULARITY BY REGION</div>
+                    <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-3 space-y-1.5">
+                      {REGIONS.map((r) => (
+                        <div key={r} className="flex items-center gap-2 text-[10px]">
+                          <span className="w-28 shrink-0 text-[#8B8593]">{r}</span>
+                          <div className="flex-1 h-2 bg-[#0A0A0C] rounded-full overflow-hidden"><div className="h-full bg-[#8B6BC0]" style={{ width: `${regions[r]}%` }} /></div>
+                          <span className="w-7 text-right font-bold text-[#F2ECDD]">{regions[r]}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               {(() => {
                 const coFinance = rivalFinanceHistory.filter((h) => h.companyId === co.id).sort((a, b) => a.weekNumber - b.weekNumber);
                 return coFinance.length > 1 ? (
@@ -8346,8 +8450,9 @@ export default function BookedRingsideEmpire() {
           const yearShows = showHistory.filter((r) => r.year === effectiveAwardsYear);
           const allMatches = yearShows.flatMap((r) => r.matches.filter((m) => m.format === "match").map((m) => ({ ...m, showDate: r.date, showCity: r.city })));
           const allAngles = yearShows.flatMap((r) => r.matches.filter((m) => m.format === "segment").map((m) => ({ ...m, showDate: r.date, showCity: r.city })));
-          const matchOfYear = allMatches.length > 0 ? allMatches.reduce((best, m) => (m.rating > best.rating ? m : best)) : null;
-          const angleOfYear = allAngles.length > 0 ? allAngles.reduce((best, m) => (m.rating > best.rating ? m : best)) : null;
+          const topMatches = [...allMatches].sort((a, b) => b.rating - a.rating).slice(0, 3);
+          const topAngles = [...allAngles].sort((a, b) => b.rating - a.rating).slice(0, 3);
+          const showOfYear = yearShows.length > 0 ? [...yearShows].sort((a, b) => b.fullRating - a.fullRating)[0] : null;
           // A simple, transparent score — not a hidden formula: every match or
           // angle you were part of adds its rating, winning a match adds a flat
           // bonus, and winning or capturing gold on top of that adds more. Highest
@@ -8363,7 +8468,61 @@ export default function BookedRingsideEmpire() {
             });
           });
           allAngles.forEach((m) => { if (m.performer) bump(m.performer.name, Math.round(m.rating * 0.5)); });
-          const wrestlerOfYearEntry = Object.entries(wrestlerScores).sort((a, b) => b[1] - a[1])[0] || null;
+          // Historical matches may only carry {name} once loaded from a save
+          // (see buildSaveSnapshot's trim) — cross-reference the live pool for
+          // sex so the men's/women's split still works after a reload.
+          const sexOf = (name) => pool.find((p) => p.name === name)?.sex || null;
+          const rankedWrestlers = Object.entries(wrestlerScores).sort((a, b) => b[1] - a[1]);
+          const wrestlerOfYearEntry = rankedWrestlers[0] || null;
+          const mensWrestlerOfYearEntry = rankedWrestlers.find(([name]) => sexOf(name) === "Male") || null;
+          const womensWrestlerOfYearEntry = rankedWrestlers.find(([name]) => sexOf(name) === "Female") || null;
+          // Promotion of the Year ranks by popularity GAINED this year, player
+          // included — fair across the board since the weekly rival-world tick
+          // snapshots the player's own popularity into the same history now.
+          const companyGrowth = (() => {
+            const ids = [...new Set(rivalFinanceHistory.filter((h) => h.year === effectiveAwardsYear).map((h) => h.companyId))];
+            return ids.map((id) => {
+              const rows = rivalFinanceHistory.filter((h) => h.companyId === id && h.year === effectiveAwardsYear).sort((a, b) => a.weekNumber - b.weekNumber);
+              if (rows.length < 2) return null;
+              const name = id === "player" ? companyName : (rivalCompanies.find((c) => c.id === id)?.name || id);
+              return { name, growth: Math.round(rows[rows.length - 1].popularity - rows[0].popularity) };
+            }).filter(Boolean).sort((a, b) => b.growth - a.growth);
+          })();
+          const promotionOfYearEntry = companyGrowth[0] || null;
+
+          const CATEGORIES = [
+            { key: "match", label: "Match of the Year" },
+            { key: "angle", label: "Angle of the Year" },
+            { key: "wrestler", label: "Wrestler of the Year" },
+            { key: "mens", label: "Men's Wrestler of the Year" },
+            { key: "womens", label: "Women's Wrestler of the Year" },
+            { key: "promotion", label: "Promotion of the Year" },
+            { key: "show", label: "Show of the Year" },
+          ];
+          const rankedMatchRow = (m, i) => (
+            <div key={i} className="bg-[#131117] rounded-lg p-3 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[9px] text-[#8B8593]">{i + 1}.</div>
+                <div className="text-xs font-bold text-[#F2ECDD] truncate">{[...m.team1, ...(m.team2 || [])].map((w) => w.name).join(m.team2?.length ? " vs " : ", ")}</div>
+                <div className="text-[10px] text-[#8B8593] mt-0.5">{formatDate(m.showDate)} &middot; {m.showCity}</div>
+              </div>
+              <div className="shrink-0 flex items-center gap-1 text-xs text-[#8B6BC0] font-bold"><Star size={12} />{m.rating}</div>
+            </div>
+          );
+          const rankedAngleRow = (m, i) => (
+            <div key={i} className="bg-[#131117] rounded-lg p-3 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[9px] text-[#8B8593]">{i + 1}.</div>
+                <div className="text-xs font-bold text-[#F2ECDD]">{angleResultText(m)}</div>
+                <div className="text-[10px] text-[#8B8593] mt-0.5">{formatDate(m.showDate)} &middot; {m.showCity}</div>
+              </div>
+              <div className="shrink-0 flex items-center gap-1 text-xs text-[#8B6BC0] font-bold"><Star size={12} />{m.rating}</div>
+            </div>
+          );
+          const wrestlerCard = (entry, emptyText) => entry ? (
+            <div className="bg-[#131117] rounded-lg p-3 text-xs"><span className="text-[#F2ECDD] font-bold">{entry[0]}</span><span className="text-[#8B8593]"> — score {Math.round(entry[1])}</span></div>
+          ) : <div className="text-xs text-[#8B8593] italic">{emptyText}</div>;
+
           return (
             <div>
               <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -8374,30 +8533,29 @@ export default function BookedRingsideEmpire() {
                 </select>
               </div>
               <div className="text-[10px] text-[#8B8593] mb-4">End-of-year honors for {companyName}, based on every show run that year. Only covers shows still in your Results history.</div>
-              <div className="space-y-3 dt:space-y-0 dt:grid dt:grid-cols-2 dt:gap-3 dt:items-start">
-                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2"><Medal size={16} className="text-[#8B6BC0]" /><span className="font-bold text-sm">Wrestler of the Year</span></div>
-                  {wrestlerOfYearEntry ? (
-                    <div className="text-xs"><span className="text-[#F2ECDD] font-bold">{wrestlerOfYearEntry[0]}</span><span className="text-[#8B8593]"> — score {Math.round(wrestlerOfYearEntry[1])}</span></div>
-                  ) : <div className="text-xs text-[#8B8593] italic">No shows run this year yet.</div>}
+              <div className="flex flex-col dt:flex-row gap-4">
+                <div className="dt:w-56 shrink-0 flex dt:flex-col flex-wrap gap-1.5">
+                  {CATEGORIES.map((c) => (
+                    <button key={c.key} onClick={() => setAwardsCategory(c.key)} className={`text-left px-3 py-2 rounded-lg text-xs font-bold ${awardsCategory === c.key ? "bg-[#5B3B8C] text-[#F2ECDD]" : "bg-[#17151C] border border-[#2B2733] text-[#8B8593] hover:text-[#F2ECDD]"}`}>
+                      {c.label}
+                    </button>
+                  ))}
                 </div>
-                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4">
-                  <div className="flex items-center gap-2 mb-2"><Star size={16} className="text-[#8B6BC0]" /><span className="font-bold text-sm">Match of the Year</span></div>
-                  {matchOfYear ? (
-                    <div className="text-xs">
-                      <div className="text-[#F2ECDD] font-bold">{[...matchOfYear.team1, ...(matchOfYear.team2 || [])].map((w) => w.name).join(matchOfYear.team2?.length ? " vs " : ", ")}</div>
-                      <div className="text-[#8B8593] mt-0.5">{matchOfYear.rating} rating &middot; {formatDate(matchOfYear.showDate)} &middot; {matchOfYear.showCity}</div>
+                <div className="flex-1 min-w-0 space-y-2">
+                  {awardsCategory === "match" && (topMatches.length > 0 ? topMatches.map(rankedMatchRow) : <div className="text-xs text-[#8B8593] italic">No matches this year yet.</div>)}
+                  {awardsCategory === "angle" && (topAngles.length > 0 ? topAngles.map(rankedAngleRow) : <div className="text-xs text-[#8B8593] italic">No angles this year yet.</div>)}
+                  {awardsCategory === "wrestler" && wrestlerCard(wrestlerOfYearEntry, "No shows run this year yet.")}
+                  {awardsCategory === "mens" && wrestlerCard(mensWrestlerOfYearEntry, "No male wrestlers scored this year yet.")}
+                  {awardsCategory === "womens" && wrestlerCard(womensWrestlerOfYearEntry, "No female wrestlers scored this year yet.")}
+                  {awardsCategory === "promotion" && (promotionOfYearEntry ? (
+                    <div className="bg-[#131117] rounded-lg p-3 text-xs"><span className="text-[#F2ECDD] font-bold">{promotionOfYearEntry.name}</span><span className="text-[#8B8593]"> — {promotionOfYearEntry.growth >= 0 ? "+" : ""}{promotionOfYearEntry.growth} popularity this year</span></div>
+                  ) : <div className="text-xs text-[#8B8593] italic">Not enough of the year has played out yet to measure growth.</div>)}
+                  {awardsCategory === "show" && (showOfYear ? (
+                    <div className="bg-[#131117] rounded-lg p-3 text-xs">
+                      <div className="text-[#F2ECDD] font-bold">Y{showOfYear.year} Wk{showOfYear.weekOfYear} &middot; {showOfYear.city} ({showOfYear.arena})</div>
+                      <div className="text-[#8B8593] mt-0.5 flex items-center gap-1"><Star size={12} className="text-[#8B6BC0]" />{showOfYear.fullRating} rating &middot; {formatDate(showOfYear.date)}</div>
                     </div>
-                  ) : <div className="text-xs text-[#8B8593] italic">No matches this year yet.</div>}
-                </div>
-                <div className="bg-[#17151C] border border-[#2B2733] rounded-lg p-4 dt:col-span-2">
-                  <div className="flex items-center gap-2 mb-2"><Mic2 size={16} className="text-[#8B6BC0]" /><span className="font-bold text-sm">Angle of the Year</span></div>
-                  {angleOfYear ? (
-                    <div className="text-xs">
-                      <div className="text-[#F2ECDD] font-bold">{angleResultText(angleOfYear)}</div>
-                      <div className="text-[#8B8593] mt-0.5">{angleOfYear.rating} rating &middot; {formatDate(angleOfYear.showDate)} &middot; {angleOfYear.showCity}</div>
-                    </div>
-                  ) : <div className="text-xs text-[#8B8593] italic">No angles this year yet.</div>}
+                  ) : <div className="text-xs text-[#8B8593] italic">No shows run this year yet.</div>)}
                 </div>
               </div>
             </div>
@@ -8466,7 +8624,7 @@ export default function BookedRingsideEmpire() {
                     {item.type === "injury" && <Skull size={11} className="text-red-400" />}
                     <span>Y{yearOf(item.showNumber)} Wk{weekOfYear(item.showNumber)} &middot; {formatDate(item.date)}</span>
                   </div>
-                  <div className={item.type === "title" ? "text-[#F2ECDD] font-semibold" : item.type === "injury" ? "text-red-300 font-semibold" : "text-[#CFC9BB]"}>{item.text}</div>
+                  <div className={item.type === "title" ? "text-[#F2ECDD] font-semibold" : item.type === "injury" ? "text-red-300 font-semibold" : "text-[#CFC9BB]"}>{flavorizeNews(item)}</div>
                 </div>
               ))}
               {universeFeed.length === 0 && <div className="text-xs text-[#8B8593] italic">Nothing to report yet — keep running shows and the story will start writing itself.</div>}
