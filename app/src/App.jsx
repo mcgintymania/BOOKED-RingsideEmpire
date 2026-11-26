@@ -235,8 +235,11 @@ function segmentLabel(index, total) {
 const ANGLE_TYPES = [
   { key: "promo", label: "Promo", desc: "Solo mic work — rated on charisma, no win/loss. Aim it at a signed wrestler to nudge or spark a rivalry, or leave it general." },
   { key: "confrontation", label: "Confrontation", desc: "Two people face to face — rated on both performers' charisma, and carries a real chance of boiling over into a physical swerve. A bigger rivalry swing than a plain promo." },
-  { key: "vignette", label: "Vignette", desc: "Solo atmosphere-building — rated on entertainment instead of charisma, no subject. A way for a strong-presentation, weak-mic performer to still pull weight on an angle." },
+  { key: "vignette", label: "Vignette", desc: "Solo atmosphere-building — rated on entertainment instead of charisma, no subject. A way for a strong-presentation, weak-mic performer to still pull weight on an angle. Point it at a real signee, injury return, or the upcoming show (see the Hype dropdown) for a rating bump — fans respond to actual news, not filler." },
 ];
+// Flat rating bump a Vignette gets for being pointed at a real hypeTargets()
+// entry instead of left as generic atmosphere-building.
+const HYPE_TARGET_BONUS = 5;
 
 // Fan trends — what the wrestling world wants right now rotates every
 // FAN_TREND_ROTATION_WEEKS weeks, giving a flat rating bonus to anything
@@ -294,6 +297,9 @@ function makeSegment(format) {
     // Mutually exclusive with titleId (a match can't simultaneously defend a
     // title and decide its own next challenger) — enforced in the UI.
     n1cTitleId: null, loserLeaves: false,
+    // Only meaningful for a Vignette angle — which real, current thing (see
+    // hypeTargets) it's packaged around, if any. null = general atmosphere.
+    hypeTargetId: null,
     minutes: SEGMENT_DEFAULT_MINUTES,
     // null = let the booker's stats decide. Otherwise the name of a wrestler
     // on the winning side/the winning participant — works for 1v1, tag (any
@@ -316,6 +322,9 @@ function angleResultText(m) {
     return `${m.performer.name} and ${m.subject.name} go face to face${m.brawl ? " — and it turns physical!" : "."}`;
   }
   if (m.angleType === "vignette") {
+    if (m.hypeInfo?.kind === "signee") return m.performer.name === m.hypeInfo.name ? `${m.performer.name} cuts a hype package for their own arrival.` : `${m.performer.name} cuts a hype package for ${m.hypeInfo.name}'s arrival.`;
+    if (m.hypeInfo?.kind === "return") return m.performer.name === m.hypeInfo.name ? `${m.performer.name} cuts a hype package for their own return from injury.` : `${m.performer.name} cuts a hype package for ${m.hypeInfo.name}'s return from injury.`;
+    if (m.hypeInfo?.kind === "show") return `${m.performer.name} cuts a hype package for the upcoming show.`;
     return `${m.performer.name} delivers a vignette.`;
   }
   return `${m.performer.name} cuts a promo${m.subject ? ` aimed at ${m.subject.name}` : ""}.`;
@@ -1903,6 +1912,7 @@ const GUIDE_SECTIONS = [
       "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks. Touring abroad (New York, Mexico City, Tokyo) is gated separately, behind reaching National company tier — a venue is also locked by company tier on top of that (Backyard is always open, Major Arena needs Global).",
       "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
       "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, or Fatal 4-Way — plus three kinds of Angle, none of which have a winner/loser or cost energy: a Promo (solo mic work, rated on charisma, aim it at someone to nudge or spark a rivalry), a Confrontation (two people face to face, rated on both their charisma, with a real chance of boiling over into a physical swerve — a much bigger rivalry swing than a plain promo), or a Vignette (solo atmosphere-building rated on entertainment instead of charisma, no subject).",
+      "A Vignette can be pointed at something real — a signee who hasn't debuted yet, a wrestler due back from injury within a few weeks, or the upcoming show — for a flat rating bonus. It's a genuine hype package, not just atmosphere, so it reads as real news rather than filler.",
       "Every match resolves with a method — Pinfall, Submission, Disqualification, or Countout — weighted by the winning side's stats. Both the winner and the method default to Auto but can be set by hand once the match is fully booked.",
       "Every match also has a Purpose and a Match Story — two separate dials. Purpose is why it's happening: Competitive is a straight fair fight, Steal the Show chases the best possible rating at the cost of more energy for both sides, Put Over books the winner to look like a star at the loser's expense (a real draw power bump for the winner, scaled to who they just beat, and a small happiness hit for the one taking the loss), and Squash is a fast, one-sided win purely to get someone over — never a great match, but a bigger credibility injection than Put Over if the loser is any kind of name. Match Story is what kind of match it reads as: Comedy Match trades ceiling for consistency, Back-and-Forth Classic only pays off when the two sides are genuinely close on paper (and falls flat if they're not), and Underdog Story only pays off — in both rating and the winner's draw power — if the lower-rated side actually pulls off the upset.",
       "Booking the exact same matchup over and over gets a real, escalating rating penalty as fans get tired of seeing it — shown as a warning before you run the show. An active rivalry gets that penalty halved, since building toward a blowoff is a real reason to run it back.",
@@ -2996,6 +3006,27 @@ export default function BookedRingsideEmpire() {
     const currNames = currentParticipants.map((w) => w.name).sort().join("|");
     return prevNames === currNames && prevNames.length > 0;
   };
+  // What a Hype vignette can actually be pointed at — real, current state
+  // (a fresh signing who hasn't debuted, someone due back from injury soon,
+  // or next week's show) rather than a separate fictional calendar of
+  // "announced" storylines. Picking a real target over leaving it general
+  // is what earns the rating bonus in resolveSegmentResult below.
+  const hypeTargets = () => {
+    const targets = [];
+    // Debut hype covers anyone actually bookable right now who's never had a
+    // match for us — a fresh exclusive signing or a freelancer's first time
+    // on the card both count as a real "new arrival" story.
+    bookable.forEach((w) => {
+      if (w.matches === 0) targets.push({ id: `signee-${w.name}`, label: `Hype ${w.name}'s arrival`, kind: "signee", name: w.name });
+    });
+    // Injury return is narrower — only an exclusive signee is "ours" in a
+    // continuing-storyline sense while they're out hurt.
+    pool.forEach((w) => {
+      if (w.contractedTo === "player" && w.injuryWeeksRemaining > 0 && w.injuryWeeksRemaining <= 3) targets.push({ id: `return-${w.name}`, label: `Hype ${w.name}'s return from injury`, kind: "return", name: w.name });
+    });
+    targets.push({ id: "next-show", label: (weekNumber + 1) % PPV_EVERY === 0 ? "Hype next week's big show" : "Hype the upcoming show", kind: "show", name: null });
+    return targets;
+  };
   const resolveSegmentResult = (seg, index, total, previousResult = null) => {
     let cap = computeSegmentCap(index, total, seg.minutes);
     const label = segmentLabel(index, total);
@@ -3016,8 +3047,11 @@ export default function BookedRingsideEmpire() {
       // genuinely going off-script, at a small energy cost (see the weekly
       // tick) instead of a promo's usual energy recovery.
       const brawl = angleType === "confrontation" && !!subject && Math.random() < 0.25;
-      const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus + trendBonus) + (brawl ? 6 : 0));
-      return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, titleInfo: null, customName: seg.customName || null, script: seg.script || null };
+      // A Vignette pointed at something real (see hypeTargets) plays better
+      // than generic atmosphere — fans respond to actual news, not filler.
+      const hypeInfo = angleType === "vignette" && seg.hypeTargetId ? hypeTargets().find((t) => t.id === seg.hypeTargetId) || null : null;
+      const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus + trendBonus) + (brawl ? 6 : 0) + (hypeInfo ? HYPE_TARGET_BONUS : 0));
+      return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, hypeInfo, titleInfo: null, customName: seg.customName || null, script: seg.script || null };
     }
     // Purpose only applies to actual matches — why it's happening (a fair
     // fight, chasing the night's best rating, elevating the winner, or a
@@ -3201,14 +3235,16 @@ export default function BookedRingsideEmpire() {
   const addSegment = (format) => setSegments((prev) => [...prev, makeSegment(format)]);
   const removeSegment = (id) => setSegments((prev) => prev.filter((s) => s.id !== id));
   const setSegmentFormat = (id, format) => {
-    updateSegment(id, (s) => ({ ...s, format, angleType: "promo", team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null, n1cTitleId: null, loserLeaves: false, winnerOverride: null, winMethodOverride: null }));
+    updateSegment(id, (s) => ({ ...s, format, angleType: "promo", team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null, n1cTitleId: null, loserLeaves: false, hypeTargetId: null, winnerOverride: null, winMethodOverride: null }));
   };
   const setSegmentAngleType = (id, angleType) => {
     // Vignette has no subject — drop one if it was set switching away from
     // Promo/Confrontation. Confrontation needs a subject, but leaves it
-    // for the player to pick rather than guessing one.
-    updateSegment(id, (s) => ({ ...s, angleType, team2: angleType === "vignette" ? [null] : s.team2 }));
+    // for the player to pick rather than guessing one. hypeTargetId only
+    // means anything on a Vignette, so it's cleared leaving one.
+    updateSegment(id, (s) => ({ ...s, angleType, team2: angleType === "vignette" ? [null] : s.team2, hypeTargetId: angleType === "vignette" ? s.hypeTargetId : null }));
   };
+  const setSegmentHypeTarget = (id, hypeTargetId) => updateSegment(id, (s) => ({ ...s, hypeTargetId }));
   const setSegmentType = (id, type) => {
     updateSegment(id, (s) => {
       if (type === "triple" || type === "fatal4") {
@@ -7639,6 +7675,14 @@ export default function BookedRingsideEmpire() {
                             ))}
                           </select>
                           {slot.team1[0] && <div className="text-[9px] text-[#8B8593] mt-1">ATTR {Math.round(attrOf(slot.team1[0]))} &middot; {slot.angleType === "vignette" ? `ENT ${slot.team1[0].ent}/100` : `CHA ${slot.team1[0].cha}/100`} &middot; {effectiveTier(slot.team1[0])} &middot; <span className={slot.team1[0].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team1[0].alignment}</span> &middot; STA {slot.team1[0].eng}/100</div>}
+                          {slot.angleType === "vignette" && (
+                            <select value={slot.hypeTargetId || ""} onChange={(e) => setSegmentHypeTarget(slot.id, e.target.value || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mt-1.5 text-[#8B6BC0]">
+                              <option value="">General atmosphere — no specific hype target</option>
+                              {hypeTargets().map((t) => (
+                                <option key={t.id} value={t.id}>{t.label}</option>
+                              ))}
+                            </select>
+                          )}
                           {slot.angleType !== "vignette" && (
                             <select value={slot.team2?.[0]?.name || ""} onChange={(e) => setSegmentMember(slot.id, "team2", 0, bookable.find((w) => w.name === e.target.value) || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1.5 text-xs mt-1.5">
                               <option value="">{slot.angleType === "confrontation" ? "Select who they face off with..." : "No subject — general promo"}</option>
@@ -7649,6 +7693,7 @@ export default function BookedRingsideEmpire() {
                           )}
                           {slot.angleType === "confrontation" && slot.team2?.[0] && <div className="text-[9px] text-[#8B8593] mt-1">ATTR {Math.round(attrOf(slot.team2[0]))} &middot; CHA {slot.team2[0].cha}/100 &middot; {effectiveTier(slot.team2[0])} &middot; <span className={slot.team2[0].alignment === "Heel" ? "text-red-400" : "text-green-400"}>{slot.team2[0].alignment}</span></div>}
                           <div className="text-[9px] text-[#8B8593] italic mt-1">{ANGLE_TYPES.find((at) => at.key === (slot.angleType || "promo"))?.desc} No win/loss, no energy cost either way{slot.angleType === "confrontation" ? " unless it turns physical." : "."}</div>
+                          {slot.angleType === "vignette" && slot.hypeTargetId && <div className="text-[9px] text-[#8B6BC0]">Hyping something real — +{HYPE_TARGET_BONUS} rating.</div>}
                         </div>
                       ) : (slot.type === "triple" || slot.type === "fatal4") ? (
                         <>
