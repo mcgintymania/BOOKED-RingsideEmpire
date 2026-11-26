@@ -1909,6 +1909,7 @@ const GUIDE_SECTIONS = [
     body: [
       "Level, venue, city, length, and cadence are all set up once on Calendar · Show Events — Book just shows what's due and lets you set the ticket price, build the card, and run it. Higher prices mean fewer fans, and your reputation in that specific city sets the ceiling.",
       "More than one show can be due the same week — a weekly Raw and SmackDown on different days, plus a monthly or quarterly PPV-style show on top. They're worked through one at a time, in day-of-week order; after running one, Book moves straight on to whichever's next, and the calendar week itself only turns over once nothing else is left due. Weekly-recurring costs (roster/staff payroll, production upkeep, loan payment) are only billed once that week, on the last show, not once per show — the Show Costs panel tells you when that's not this one.",
+      "The \"Two-night event\" checkbox when adding a Show Event on Calendar creates a linked Night 1/Night 2 pair on consecutive days, same cadence — the same two-shows-one-week mechanic above, just set up in one click instead of building and syncing two templates by hand.",
       "You start in one city of your choosing and nowhere else. Get any city you can already book to 70% local popularity and the next roughly-nearby group of cities unlocks. Touring abroad (New York, Mexico City, Tokyo) is gated separately, behind reaching National company tier — a venue is also locked by company tier on top of that (Backyard is always open, Major Arena needs Global).",
       "Build your card as a running order of matches and segments against a time budget set by your venue (Backyard gives you 30 minutes, Major Arena 90). Position matters more than anything else — later on the card means a higher rating ceiling, so a top star wasted in an early segment still can't out-rate your Main Event — and minutes allocated matter too, within that ceiling. Each segment resolves the moment it's fully booked, so you'll see the result right away rather than waiting for the whole show. Once you're National tier or above, leaving a big chunk of your time budget unused costs you real rating and money — fans at that level expect a full card.",
       "Match types: 1v1, 2v2 tag (tag teams from a stable get their opponent list filtered to stablemates automatically), Triple Threat, or Fatal 4-Way — plus three kinds of Angle, none of which have a winner/loser or cost energy: a Promo (solo mic work, rated on charisma, aim it at someone to nudge or spark a rivalry), a Confrontation (two people face to face, rated on both their charisma, with a real chance of boiling over into a physical swerve — a much bigger rivalry swing than a plain promo), or a Vignette (solo atmosphere-building rated on entertainment instead of charisma, no subject).",
@@ -2277,6 +2278,7 @@ export default function BookedRingsideEmpire() {
   const [newTemplateArenaIdx, setNewTemplateArenaIdx] = useState(0);
   const [newTemplateIntervalWeeks, setNewTemplateIntervalWeeks] = useState(1);
   const [newTemplateDayOfWeek, setNewTemplateDayOfWeek] = useState("Monday");
+  const [newTemplateTwoNight, setNewTemplateTwoNight] = useState(false);
   const [newTemplatePreferredCity, setNewTemplatePreferredCity] = useState("");
   const [newTemplateShowMinutes, setNewTemplateShowMinutes] = useState(ARENAS[0].showMinutes);
   const [financeHistory, setFinanceHistory] = useState([{ weekNumber: 0, year: 1, weekOfYear: 0, bank: 20000 }]);
@@ -2324,12 +2326,22 @@ export default function BookedRingsideEmpire() {
 
   const addEventTemplate = () => {
     if (!newTemplateName.trim() || !newTemplatePreferredCity) return;
-    setEventTemplates((ts) => [...ts, {
-      id: `tmpl-${Date.now()}`, name: newTemplateName.trim(), level: newTemplateLevel,
-      arenaIdx: newTemplateArenaIdx, intervalWeeks: Math.max(1, newTemplateIntervalWeeks),
-      nextWeekNumber: weekNumber, dayOfWeek: newTemplateDayOfWeek, preferredCity: newTemplatePreferredCity,
-      showMinutes: newTemplateShowMinutes,
-    }]);
+    const base = {
+      level: newTemplateLevel, arenaIdx: newTemplateArenaIdx, intervalWeeks: Math.max(1, newTemplateIntervalWeeks),
+      nextWeekNumber: weekNumber, preferredCity: newTemplatePreferredCity, showMinutes: newTemplateShowMinutes,
+    };
+    const trimmedName = newTemplateName.trim();
+    // A two-night event is just two templates sharing the exact same week
+    // and cadence, on consecutive days — the same multi-show-per-week engine
+    // that already runs a weekly TV show and a weekend PPV together, not a
+    // separate structure.
+    const newTemplates = newTemplateTwoNight
+      ? [
+          { id: `tmpl-${Date.now()}-n1`, name: `${trimmedName} — Night 1`, dayOfWeek: newTemplateDayOfWeek, ...base },
+          { id: `tmpl-${Date.now()}-n2`, name: `${trimmedName} — Night 2`, dayOfWeek: DAYS_OF_WEEK[(DAYS_OF_WEEK.indexOf(newTemplateDayOfWeek) + 1) % DAYS_OF_WEEK.length], ...base },
+        ]
+      : [{ id: `tmpl-${Date.now()}`, name: trimmedName, dayOfWeek: newTemplateDayOfWeek, ...base }];
+    setEventTemplates((ts) => [...ts, ...newTemplates]);
     // A brand-new template due immediately (this week) won't be picked up by
     // the week-change effect, since weekNumber itself hasn't changed — apply
     // its preset to the Book screen right away instead.
@@ -2341,6 +2353,7 @@ export default function BookedRingsideEmpire() {
     setCity(newTemplatePreferredCity);
     setNewTemplateName(""); setNewTemplateLevel("main"); setNewTemplateArenaIdx(0); setNewTemplateIntervalWeeks(1);
     setNewTemplateDayOfWeek("Monday"); setNewTemplatePreferredCity(""); setNewTemplateShowMinutes(ARENAS[0].showMinutes);
+    setNewTemplateTwoNight(false);
   };
   const removeEventTemplate = (id) => {
     setEventTemplates((ts) => ts.filter((t) => t.id !== id));
@@ -6586,10 +6599,17 @@ export default function BookedRingsideEmpire() {
                   <option value="" disabled>Choose a city...</option>
                   {unlockedCities.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
+                <label className="flex items-center gap-1.5 text-[10px] text-[#8B8593] cursor-pointer" title="Creates a linked pair — Night 1 on the day picked above, Night 2 the day after — both due the same week, same cadence, same venue and city.">
+                  <input type="checkbox" checked={newTemplateTwoNight} onChange={(e) => setNewTemplateTwoNight(e.target.checked)} />
+                  Two-night event
+                </label>
                 <button onClick={addEventTemplate} disabled={!newTemplateName.trim() || !newTemplatePreferredCity} className="ml-auto px-3 py-1.5 rounded text-[10px] font-bold bg-[#5B3B8C] hover:bg-[#6C47A3] disabled:opacity-40 disabled:cursor-not-allowed text-[#F2ECDD]">
                   Add
                 </button>
               </div>
+              {newTemplateTwoNight && (
+                <div className="text-[9px] text-[#8B6BC0] italic mb-2">Will add "{newTemplateName.trim() || "Event"} — Night 1" on {newTemplateDayOfWeek} and "{newTemplateName.trim() || "Event"} — Night 2" on {DAYS_OF_WEEK[(DAYS_OF_WEEK.indexOf(newTemplateDayOfWeek) + 1) % DAYS_OF_WEEK.length]}, both due the same week.</div>
+              )}
               {eventTemplates.some((t) => t.intervalWeeks === newTemplateIntervalWeeks && t.dayOfWeek === newTemplateDayOfWeek) && (
                 <div className="text-[9px] text-yellow-400 italic mb-2">Same day and cadence as another show already on your schedule — when both are due the same week, this one comes first; otherwise each runs as its own show, same week or not.</div>
               )}
