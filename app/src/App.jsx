@@ -1441,8 +1441,12 @@ function rivalEventTemplates(co) {
   const weekly = co.customShowNames?.length
     ? co.customShowNames
     : Array.from({ length: weeklyCount }, (_, i) => `${abbr} ${RIVAL_SHOW_WORDS[(seed + i) % RIVAL_SHOW_WORDS.length]}`);
+  // Always a list, even the procedural fallback (wrapped to one entry) —
+  // a real company's monthly special isn't one fixed name forever, it
+  // rotates through its actual calendar of named shows (see ppvIndex in
+  // rivalShowDueThisWeek).
   const ppv = structure.ppv
-    ? (co.customPPVNames?.length ? co.customPPVNames[seed % co.customPPVNames.length] : `${abbr} ${PPV_SHOW_WORDS[seed % PPV_SHOW_WORDS.length]}`)
+    ? (co.customPPVNames?.length ? co.customPPVNames : [`${abbr} ${PPV_SHOW_WORDS[seed % PPV_SHOW_WORDS.length]}`])
     : null;
   return { weekly, ppv, runsWeekly: structure.weekly > 0 };
 }
@@ -1450,7 +1454,10 @@ function rivalEventTemplates(co) {
 // which name — the one place both the sim and the display agree on cadence.
 function rivalShowDueThisWeek(co, weekNumber, isPPVWeek) {
   const { weekly, ppv, runsWeekly } = rivalEventTemplates(co);
-  if (isPPVWeek && ppv) return { eventName: ppv, guaranteed: true };
+  if (isPPVWeek && ppv) {
+    const ppvIndex = Math.floor(weekNumber / PPV_EVERY) % ppv.length;
+    return { eventName: ppv[ppvIndex], guaranteed: true };
+  }
   if (runsWeekly) return { eventName: weekly[weekNumber % weekly.length], guaranteed: false };
   // Unknown tier: no weekly show at all — just their one small show, on the
   // same once-a-month cadence as everyone else's PPV week.
@@ -7418,7 +7425,7 @@ export default function BookedRingsideEmpire() {
                 {(() => {
                   const { weekly, ppv, runsWeekly } = rivalEventTemplates(co);
                   if (!runsWeekly) return `${weekly[0]} — an occasional small show, roughly once a month.`;
-                  return `${weekly.join(", ")}${ppv ? ` · ${ppv} (monthly special)` : ""}`;
+                  return `${weekly.join(", ")}${ppv ? ` · ${ppv.join(", ")} (monthly special${ppv.length > 1 ? "s, rotating" : ""})` : ""}`;
                 })()}
               </div>
               <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">RECENT SHOWS</div>
