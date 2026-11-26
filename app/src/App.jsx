@@ -639,8 +639,14 @@ function downloadTextFile(filename, text, mimeType) {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-const WRESTLER_CSV_HEADERS = ["name", "age", "sex", "weightClass", "alignment", "overall"];
-const COMPANY_CSV_HEADERS = ["name", "bookerName", "titleName", "popularity", "funds"];
+const WRESTLER_CSV_HEADERS = ["name", "age", "sex", "weightClass", "alignment", "overall", "company"];
+// titleName/showNames/ppvNames all support adding MORE than one to an
+// existing company: re-upload a row with a company name that already
+// exists (one you own, one already in the world, or one created earlier
+// in the same file) and it adds that title/those show names to it instead
+// of creating a duplicate company. showNames/ppvNames are ; separated and
+// override the procedural name generator for that company entirely.
+const COMPANY_CSV_HEADERS = ["name", "bookerName", "titleName", "popularity", "funds", "showNames", "ppvNames"];
 function slugifyCompanyId(name, existingIds) {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "company";
   let id = base, n = 2;
@@ -1428,8 +1434,16 @@ function rivalEventTemplates(co) {
   const seed = hashStr(co.id);
   const structure = RIVAL_SHOW_STRUCTURE[popularityTier(co.popularity)];
   const weeklyCount = structure.weekly || 1; // Unknown still gets one named show, just a rare one
-  const weekly = Array.from({ length: weeklyCount }, (_, i) => `${abbr} ${RIVAL_SHOW_WORDS[(seed + i) % RIVAL_SHOW_WORDS.length]}`);
-  const ppv = structure.ppv ? `${abbr} ${PPV_SHOW_WORDS[seed % PPV_SHOW_WORDS.length]}` : null;
+  // Real/custom names (see the Company CSV's showNames/ppvNames columns)
+  // fully override the procedural generator below when a company was
+  // imported with them — no reason to make up "AWF Mayhem" for a company
+  // that already told you it runs Raw and SmackDown.
+  const weekly = co.customShowNames?.length
+    ? co.customShowNames
+    : Array.from({ length: weeklyCount }, (_, i) => `${abbr} ${RIVAL_SHOW_WORDS[(seed + i) % RIVAL_SHOW_WORDS.length]}`);
+  const ppv = structure.ppv
+    ? (co.customPPVNames?.length ? co.customPPVNames[seed % co.customPPVNames.length] : `${abbr} ${PPV_SHOW_WORDS[seed % PPV_SHOW_WORDS.length]}`)
+    : null;
   return { weekly, ppv, runsWeekly: structure.weekly > 0 };
 }
 // Decides whether this company even attempts a show this week, and under
@@ -2008,6 +2022,7 @@ const GUIDE_SECTIONS = [
     key: "backoffice", title: "Back Office & Saving", icon: NotebookPen,
     body: [
       "Back Office (Menu) is where your company name and your own promoter name, age, and sex are edited — kept separate from the day-to-day screens since they're not something you're changing often. It's also where you found a Developmental feeder promotion and upgrade Production (pyro, titantron, lighting, cameras) — both one-time capital investments.",
+      "The World Editor (under Back Office) bulk-imports wrestlers and companies from a CSV — download its templates to see the exact columns. A wrestler row's optional company column assigns them straight to an existing company (yours or a rival's) by name instead of leaving them a free agent. A company row's optional showNames/ppvNames columns (semicolon-separated) replace that company's made-up show names with real ones you supply; re-uploading a row with a company name that already exists adds another title to it instead of creating a duplicate — the way to give one promotion its full real title list across several rows.",
       "Saves (Menu) has one manual save button plus an automatic save that updates after every show as a safety net — no more juggling numbered slots.",
       "Retire (under Saves) ends your current run on your own terms, files it under Previous Games same as getting fired, and starts you fresh with a new home city to choose. Reset Full Progress, in the same place, wipes everything — including lifetime Achievements and Hall of Fame — and can't be undone.",
     ],
@@ -2640,11 +2655,11 @@ export default function BookedRingsideEmpire() {
   };
 
   const downloadWrestlerTemplate = () => downloadTextFile("booked-wrestler-template.csv", toCSV([
-    { name: "Johnny Thunder", age: 27, sex: "Male", weightClass: "Heavyweight", alignment: "Face", overall: 65 },
-    { name: "The Viper", age: 31, sex: "Male", weightClass: "Cruiserweight", alignment: "Heel", overall: 58 },
+    { name: "Johnny Thunder", age: 27, sex: "Male", weightClass: "Heavyweight", alignment: "Face", overall: 65, company: "" },
+    { name: "The Viper", age: 31, sex: "Male", weightClass: "Cruiserweight", alignment: "Heel", overall: 58, company: "" },
   ], WRESTLER_CSV_HEADERS));
   const downloadWrestlerExport = () => downloadTextFile("booked-wrestlers-export.csv", toCSV(
-    pool.map((w) => ({ name: w.name, age: w.age, sex: w.sex, weightClass: w.weightClass, alignment: w.alignment, overall: Math.round(avgStats(w)) })),
+    pool.map((w) => ({ name: w.name, age: w.age, sex: w.sex, weightClass: w.weightClass, alignment: w.alignment, overall: Math.round(avgStats(w)), company: w.contractedTo === "player" ? companyName : (rivalCompanies.find((c) => c.id === w.contractedTo)?.name || "") })),
     WRESTLER_CSV_HEADERS
   ));
   const handleWrestlerCSVUpload = (e) => {
@@ -2660,6 +2675,16 @@ export default function BookedRingsideEmpire() {
       const nameIdx = idx("name");
       if (nameIdx === -1) { setWrestlerImportSummary({ added: 0, skipped: [{ row: 0, reason: 'No "name" column found.' }] }); return; }
       const existingNames = new Set(pool.map((w) => w.name));
+      // "company" is optional and resolved by name, not id — matches your own
+      // promotion's name, or any rival's, case-insensitively; blank or no
+      // match just leaves them a free agent (the pre-existing behavior).
+      const companyNameToId = new Map(rivalCompanies.map((c) => [c.name.toLowerCase(), c.id]));
+      const resolveCompany = (raw) => {
+        const trimmed = (raw || "").trim();
+        if (!trimmed) return null;
+        if (trimmed.toLowerCase() === companyName.toLowerCase()) return "player";
+        return companyNameToId.get(trimmed.toLowerCase()) || null;
+      };
       const added = [];
       const skipped = [];
       rows.slice(1).forEach((r, i) => {
@@ -2672,7 +2697,8 @@ export default function BookedRingsideEmpire() {
         const weightClass = WEIGHT_CLASSES.includes((r[idx("weightclass")] || "").trim()) ? r[idx("weightclass")].trim() : WEIGHT_CLASSES[rand(0, WEIGHT_CLASSES.length - 1)];
         const alignment = ALIGNMENTS.includes((r[idx("alignment")] || "").trim()) ? r[idx("alignment")].trim() : ALIGNMENTS[rand(0, ALIGNMENTS.length - 1)];
         const overall = clamp(Math.round(Number(r[idx("overall")]) || 50), 1, 100);
-        added.push(makeWrestlerFromOverall(name, overall, { age, sex, weightClass, alignment }));
+        const contractedTo = resolveCompany(r[idx("company")]);
+        added.push(makeWrestlerFromOverall(name, overall, { age, sex, weightClass, alignment, contractedTo, contractExpiresWeek: contractedTo ? weekNumber + 52 : null }));
       });
       if (added.length > 0) setPool((p) => [...p, ...added]);
       setWrestlerImportSummary({ added: added.length, skipped });
@@ -2681,10 +2707,11 @@ export default function BookedRingsideEmpire() {
   };
 
   const downloadCompanyTemplate = () => downloadTextFile("booked-company-template.csv", toCSV([
-    { name: "Thunderdome Wrestling", bookerName: "Alex Rivera", titleName: "Thunderdome Championship", popularity: 25, funds: 100000 },
+    { name: "Thunderdome Wrestling", bookerName: "Alex Rivera", titleName: "Thunderdome Championship", popularity: 25, funds: 100000, showNames: "Thunderdome Weekly", ppvNames: "Thunderdome Supercard" },
+    { name: "Thunderdome Wrestling", bookerName: "", titleName: "Thunderdome Tag Team Championship", popularity: "", funds: "", showNames: "", ppvNames: "" },
   ], COMPANY_CSV_HEADERS));
   const downloadCompanyExport = () => downloadTextFile("booked-companies-export.csv", toCSV(
-    rivalCompanies.map((c) => ({ name: c.name, bookerName: c.bookerName, titleName: c.titleName, popularity: Math.round(c.popularity), funds: Math.round(c.funds) })),
+    rivalCompanies.map((c) => ({ name: c.name, bookerName: c.bookerName, titleName: c.titleName, popularity: Math.round(c.popularity), funds: Math.round(c.funds), showNames: (c.customShowNames || []).join(";"), ppvNames: (c.customPPVNames || []).join(";") })),
     COMPANY_CSV_HEADERS
   ));
   const handleCompanyCSVUpload = (e) => {
@@ -2700,24 +2727,41 @@ export default function BookedRingsideEmpire() {
       const nameIdx = idx("name");
       if (nameIdx === -1) { setCompanyImportSummary({ added: 0, skipped: [{ row: 0, reason: 'No "name" column found.' }] }); return; }
       const existingIds = rivalCompanies.map((c) => c.id);
+      // A row whose name matches a company that already exists (one already
+      // in the world, or one added earlier in this same file) just adds
+      // ANOTHER title to it instead of creating a duplicate company — the
+      // way you give a real promotion its full real title list across
+      // several rows.
+      const nameToId = new Map(rivalCompanies.map((c) => [c.name.toLowerCase(), c.id]));
       const addedCompanies = [];
       const addedTitles = [];
       const skipped = [];
       rows.slice(1).forEach((r, i) => {
         const name = (r[nameIdx] || "").trim();
         if (!name) { skipped.push({ row: i + 2, reason: "Missing name." }); return; }
+        const titleName = (r[idx("titlename")] || "").trim();
+        const existingId = nameToId.get(name.toLowerCase());
+        if (existingId) {
+          if (!titleName) { skipped.push({ row: i + 2, reason: `"${name}" already exists and no titleName given — nothing to add.` }); return; }
+          addedTitles.push({ id: `${existingId}-title-${i}`, name: titleName, companyId: existingId, holder: null, reignStartWeek: null, totalDefenses: 0 });
+          return;
+        }
         const popularity = clamp(Math.round(Number(r[idx("popularity")]) || 10), 0, 100);
         const funds = Math.max(0, Math.round(Number(r[idx("funds")]) || 25000));
         const bookerName = (r[idx("bookername")] || "").trim() || randomBookerName();
-        const titleName = (r[idx("titlename")] || "").trim() || `${name} Championship`;
+        const resolvedTitleName = titleName || `${name} Championship`;
+        const showNames = (r[idx("shownames")] || "").split(";").map((s) => s.trim()).filter(Boolean);
+        const ppvNames = (r[idx("ppvnames")] || "").split(";").map((s) => s.trim()).filter(Boolean);
         const id = slugifyCompanyId(name, [...existingIds, ...addedCompanies.map((c) => c.id)]);
-        addedCompanies.push({ id, name, bookerName, titleName, popularity, funds, showsRun: 0, lastTier: popularityTier(popularity), acquired: false });
-        addedTitles.push({ id: `${id}-title`, name: titleName, companyId: id, holder: null, reignStartWeek: null, totalDefenses: 0 });
+        nameToId.set(name.toLowerCase(), id);
+        addedCompanies.push({
+          id, name, bookerName, titleName: resolvedTitleName, popularity, funds, showsRun: 0, lastTier: popularityTier(popularity), acquired: false,
+          customShowNames: showNames.length > 0 ? showNames : null, customPPVNames: ppvNames.length > 0 ? ppvNames : null,
+        });
+        addedTitles.push({ id: `${id}-title-${i}`, name: resolvedTitleName, companyId: id, holder: null, reignStartWeek: null, totalDefenses: 0 });
       });
-      if (addedCompanies.length > 0) {
-        setRivalCompanies((cs) => [...cs, ...addedCompanies]);
-        setRivalTitles((ts) => [...ts, ...addedTitles]);
-      }
+      if (addedCompanies.length > 0) setRivalCompanies((cs) => [...cs, ...addedCompanies]);
+      if (addedTitles.length > 0) setRivalTitles((ts) => [...ts, ...addedTitles]);
       setCompanyImportSummary({ added: addedCompanies.length, skipped });
     };
     reader.readAsText(file);
