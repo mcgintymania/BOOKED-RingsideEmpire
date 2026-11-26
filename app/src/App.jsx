@@ -331,6 +331,45 @@ function angleResultText(m) {
   return `${m.performer.name}${managerTag} cuts a promo${m.subject ? ` aimed at ${m.subject.name}` : ""}.`;
 }
 
+// A hired Commentator's own line on a match — only for the night's biggest
+// moments (title change, an earned contendership, a Loser Leaves stakes
+// match, a real upset, or just a standout rating), picked by priority since
+// a match can qualify for more than one. Deterministic per match (seeded
+// off its own slotKey) so it doesn't reshuffle on every re-render.
+const COMMENTARY_LINES = {
+  titleChange: [
+    "\"We are witnessing history here!\"",
+    "\"I don't believe it — a BRAND NEW CHAMPION!\"",
+    "\"This changes everything going forward!\"",
+  ],
+  n1c: [
+    "\"They've earned themselves a title shot tonight!\"",
+    "\"That's a statement win — the champion needs to be paying attention!\"",
+  ],
+  loserLeaves: [
+    "\"That's it — that's the end of the line here!\"",
+    "\"What a way to go out... released, just like that!\"",
+  ],
+  upset: [
+    "\"Nobody — and I mean NOBODY — saw that coming!\"",
+    "\"I am stunned. Absolutely stunned!\"",
+  ],
+  greatMatch: [
+    "\"This is the kind of match people will be talking about for weeks!\"",
+    "\"What a performance — both of them left everything in that ring!\"",
+  ],
+};
+function commentaryLineFor(m, commentatorName) {
+  if (!commentatorName || m.format !== "match") return null;
+  const pick = (pool) => `${commentatorName}: ${pool[hashStr(String(m.slotKey)) % pool.length]}`;
+  if (m.titleInfo && !m.titleInfo.defended) return pick(COMMENTARY_LINES.titleChange);
+  if (m.n1cInfo) return pick(COMMENTARY_LINES.n1c);
+  if (m.loserLeaves) return pick(COMMENTARY_LINES.loserLeaves);
+  if (m.upsetHappened) return pick(COMMENTARY_LINES.upset);
+  if (m.rating >= 85) return pick(COMMENTARY_LINES.greatMatch);
+  return null;
+}
+
 // News items are built at the moment they happen from a single flat fact
 // (a release, an injury, a title change) — true, but thin as a sentence on
 // its own. Rather than rewriting every one of those call sites, a second
@@ -547,6 +586,7 @@ const STAFF_ROLES = [
   { key: "trainer", label: "Trainer", desc: "Coaches your Developmental prospects directly — the better the trainer, the faster they close the gap to their potential." },
   { key: "manager", label: "Manager", desc: "An on-screen mouthpiece, not a backstage role — assign one to a specific wrestler from their card below. Accompanies that wrestler into angles and matches for a rating bump scaled to the manager's own skill, and gets name-checked in the result." },
   { key: "authority", label: "Authority Figure", desc: "An on-screen GM/boss character who doesn't manage anyone or touch a match directly — makes the news from time to time, and a sharp one keeps the whole locker room's morale up a little; a weak one lets it slip." },
+  { key: "commentator", label: "Commentator", desc: "Calls the action from ringside — a small show-wide rating bonus like Assistant Booker's, plus they'll call out the night's biggest moments (title changes, upsets, a stand-out rating) with their own commentary line in the results." },
 ];
 // A retiring wrestler's in-ring résumé is exactly the pedigree a locker room
 // wants from one of these three roles — referee/medical/ring crew are
@@ -1932,7 +1972,7 @@ const GUIDE_SECTIONS = [
   {
     key: "staff", title: "Staff", icon: HardHat,
     body: [
-      "Staff (Menu) covers nine roles, each hired straight from a standing candidate pool — no bidding against yourself, just pick a candidate and offer a contract. Agent, Referee, and Assistant Booker all raise the ceiling your matches can realistically hit; Medical Staff cuts injury odds and shortens recovery; Ring Crew reduces the odds of a general company catastrophe (lawsuits, tax audits, scandals); Security does the same for crowd and venue incidents specifically (fights, barrier jumps, backstage breaches); Trainer speeds up how fast Developmental prospects close the gap to their potential. Only your single best hire per role counts — a second Agent doesn't stack with the first. The last two are on-screen, not backstage, and don't share that cap: a Manager is assigned to one specific wrestler from their card (accompanies them into angles and matches for a rating bump) and an Authority Figure is an on-screen GM who makes the news now and then and nudges the whole roster's morale, up or down, based on their skill.",
+      "Staff (Menu) covers ten roles, each hired straight from a standing candidate pool — no bidding against yourself, just pick a candidate and offer a contract. Agent, Referee, Assistant Booker, and Commentator all raise the ceiling your matches can realistically hit; Medical Staff cuts injury odds and shortens recovery; Ring Crew reduces the odds of a general company catastrophe (lawsuits, tax audits, scandals); Security does the same for crowd and venue incidents specifically (fights, barrier jumps, backstage breaches); Trainer speeds up how fast Developmental prospects close the gap to their potential. Only your single best hire per role counts — a second Agent doesn't stack with the first. The last two are on-screen, not backstage, and don't share that cap: a Manager is assigned to one specific wrestler from their card (accompanies them into angles and matches for a rating bump) and an Authority Figure is an on-screen GM who makes the news now and then and nudges the whole roster's morale, up or down, based on their skill. A hired Commentator also calls out the night's biggest moments — a title change, an earned contendership, a Loser Leaves stakes match, a real upset, or just a standout rating — with their own line in the results.",
       "Rivals aren't just sitting there — every non-acquired rival company competes for the exact same candidate pool, hiring and occasionally losing staff of their own over time. Anyone a rival's already snapped up shows up greyed out in your Candidates list rather than just vanishing, so you can see the competition for talent happening.",
       "Once you've founded a Developmental feeder promotion (Back Office), its Promotions screen entry becomes a full Training Facility profile: your hired Trainer(s) by name, every current trainee's progress bar toward their potential, and an Alumni list of everyone who's actually graduated to your main roster.",
     ],
@@ -3039,15 +3079,18 @@ export default function BookedRingsideEmpire() {
   const bestSecuritySkill = bestStaffSkill("security");
   const bestBookerSkill = bestStaffSkill("booker");
   const bestTrainerSkill = bestStaffSkill("trainer");
+  const bestCommentatorSkill = bestStaffSkill("commentator");
   // A Manager is assigned to one wrestler (see assignManager) rather than
   // contributing a blanket bonus like the other roles — this looks up
   // whichever hired manager (if any) is currently assigned to a given name.
   const managerFor = (name) => hiredStaff.find((s) => s.role === "manager" && s.assignedTo === name) || null;
   const hiredAuthority = hiredStaff.find((s) => s.role === "authority") || null;
+  const hiredCommentator = hiredStaff.find((s) => s.role === "commentator") || null;
   // Agents and a sharp referee raise the ceiling a match can realistically hit;
-  // an assistant booker's contribution is smaller and show-wide rather than
-  // per-match. Caps at +12 total with max skill across all three roles.
-  const staffRatingBonus = Math.round((bestAgentSkill / 100) * 6 + (bestRefereeSkill / 100) * 3 + (bestBookerSkill / 100) * 3);
+  // an assistant booker's and a commentator's contributions are smaller and
+  // show-wide rather than per-match. Caps at +15 total with max skill across
+  // all four roles.
+  const staffRatingBonus = Math.round((bestAgentSkill / 100) * 6 + (bestRefereeSkill / 100) * 3 + (bestBookerSkill / 100) * 3 + (bestCommentatorSkill / 100) * 3);
   const medicalInjuryFactor = 1 - (bestMedicalSkill / 100) * 0.5;
   const ringCrewCatastropheFactor = 1 - (bestRingCrewSkill / 100) * 0.5;
   const securityIncidentFactor = 1 - (bestSecuritySkill / 100) * 0.6;
@@ -3207,7 +3250,8 @@ export default function BookedRingsideEmpire() {
       }
       const n1cInfo = n1cInfoFor(seg, winnerTeam);
       const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, participants) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, matchManagers, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM, customName: seg.customName || null, script: seg.script || null };
+      const commentaryLine = commentaryLineFor({ format: "match", slotKey: seg.id, titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, upsetHappened: isUpsetMM, rating }, hiredCommentator?.name);
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, matchManagers, commentaryLine, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM, customName: seg.customName || null, script: seg.script || null };
     }
     const team1 = seg.team1.filter(Boolean);
     const team2 = seg.team2.filter(Boolean);
@@ -3310,7 +3354,8 @@ export default function BookedRingsideEmpire() {
     rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetST ? 6 : 0) + managerBonus);
     const n1cInfo = n1cInfoFor(seg, winnerTeam);
     const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, [...team1, ...team2]) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, matchManagers, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST, customName: seg.customName || null, script: seg.script || null };
+    const commentaryLine = commentaryLineFor({ format: "match", slotKey: seg.id, titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, upsetHappened: isUpsetST, rating }, hiredCommentator?.name);
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, matchManagers, commentaryLine, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST, customName: seg.customName || null, script: seg.script || null };
   };
 
   // Applies a field update to one segment, then re-resolves it (or clears
@@ -8117,6 +8162,7 @@ export default function BookedRingsideEmpire() {
                           {slot.result.n1cInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={11} /> {slot.result.n1cInfo.label} is #1 contender for the {slot.result.n1cInfo.name}!</div>}
                           {slot.result.loserLeaves && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-red-400"><Skull size={11} /> Loser Leaves — {slot.result.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
                           {slot.result.matchManagers?.length > 0 && <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#8B8593]"><Mic2 size={11} /> At ringside: {slot.result.matchManagers.map((m) => m.name).join(", ")}</div>}
+                          {slot.result.commentaryLine && <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#8B6BC0] italic"><Tv size={11} /> {slot.result.commentaryLine}</div>}
                           {slot.result.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{slot.result.script}</div>}
                         </div>
                       )}
@@ -8279,6 +8325,7 @@ export default function BookedRingsideEmpire() {
                   {m.n1cInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={11} /> {m.n1cInfo.label} is #1 contender for the {m.n1cInfo.name}!</div>}
                   {m.loserLeaves && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-red-400"><Skull size={11} /> Loser Leaves — {m.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
                   {m.matchManagers?.length > 0 && <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#8B8593]"><Mic2 size={11} /> At ringside: {m.matchManagers.map((mg) => mg.name).join(", ")}</div>}
+                  {m.commentaryLine && <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#8B6BC0] italic"><Tv size={11} /> {m.commentaryLine}</div>}
                   {m.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                 </div>
               ))}
@@ -8400,6 +8447,7 @@ export default function BookedRingsideEmpire() {
                             {m.n1cInfo && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={10} /> {m.n1cInfo.label} is #1 contender for the {m.n1cInfo.name}!</div>}
                             {m.loserLeaves && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-red-400"><Skull size={10} /> Loser Leaves — {m.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
                             {m.matchManagers?.length > 0 && <div className="flex items-center gap-1 mt-0.5 text-[10px] text-[#8B8593]"><Mic2 size={10} /> At ringside: {m.matchManagers.map((mg) => mg.name).join(", ")}</div>}
+                            {m.commentaryLine && <div className="flex items-center gap-1 mt-0.5 text-[10px] text-[#8B6BC0] italic"><Tv size={10} /> {m.commentaryLine}</div>}
                             {m.script && <div className="mt-0.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                           </div>
                         ))}
