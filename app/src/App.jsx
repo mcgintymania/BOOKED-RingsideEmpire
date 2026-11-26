@@ -1377,24 +1377,44 @@ function rivalShowMinutes(popularity) {
 }
 // Named recurring shows for every rival, same spirit as the player's own
 // Calendar event templates — derived, not separately tracked: how many a
-// company has scales with their CURRENT tier (so growing into a bigger
-// tier genuinely adds a show), and the actual names are deterministic from
-// the company's own id so they don't reshuffle every render.
+// company has, and whether they're weekly TV-style shows or a once-a-month
+// PPV-style special, scales with their CURRENT tier (so growing into a
+// bigger tier genuinely adds a show, live). The actual names are
+// deterministic from the company's own id so they don't reshuffle every
+// render. A brand new company doesn't run weekly at all yet — just the
+// occasional small show, the same cadence as the shared monthly PPV week.
 const RIVAL_SHOW_WORDS = ["Mayhem", "Rampage", "Uproar", "Collision", "Fury", "Showdown", "Revolution", "Primetime", "Payback", "Overdrive", "Warzone", "Fallout", "Reckoning", "Ignition", "Backlash"];
-const RIVAL_SHOW_COUNT_BY_TIER = { Unknown: 1, Local: 1, Regional: 2, National: 3, Global: 4 };
+const PPV_SHOW_WORDS = ["Supremacy", "Apocalypse", "Reign", "Legacy", "Ascension", "Vendetta", "Dynasty", "Conquest"];
+// { weekly: how many distinct weekly-rotating shows, ppv: whether there's
+// also a separately-branded monthly special on top of those }.
+const RIVAL_SHOW_STRUCTURE = { Unknown: { weekly: 0, ppv: false }, Local: { weekly: 1, ppv: false }, Regional: { weekly: 2, ppv: false }, National: { weekly: 2, ppv: true }, Global: { weekly: 3, ppv: true } };
 function rivalCompanyAbbrev(name) {
   const initials = name.split(" ").filter(Boolean).map((w) => w[0]).join("").toUpperCase();
   return initials.length >= 2 ? initials.slice(0, 4) : name.slice(0, 3).toUpperCase();
 }
+// Returns { weekly: [names...], ppv: name|null } — a brand new (Unknown)
+// company has no weekly show, just an occasional small one, modeled as a
+// single-entry "weekly" list that only actually fires on the shared PPV
+// cadence (see rivalShowDueThisWeek) rather than inventing a second cadence.
 function rivalEventTemplates(co) {
   const abbr = rivalCompanyAbbrev(co.name);
   const seed = hashStr(co.id);
-  const count = RIVAL_SHOW_COUNT_BY_TIER[popularityTier(co.popularity)];
-  return Array.from({ length: count }, (_, i) => `${abbr} ${RIVAL_SHOW_WORDS[(seed + i) % RIVAL_SHOW_WORDS.length]}`);
+  const structure = RIVAL_SHOW_STRUCTURE[popularityTier(co.popularity)];
+  const weeklyCount = structure.weekly || 1; // Unknown still gets one named show, just a rare one
+  const weekly = Array.from({ length: weeklyCount }, (_, i) => `${abbr} ${RIVAL_SHOW_WORDS[(seed + i) % RIVAL_SHOW_WORDS.length]}`);
+  const ppv = structure.ppv ? `${abbr} ${PPV_SHOW_WORDS[seed % PPV_SHOW_WORDS.length]}` : null;
+  return { weekly, ppv, runsWeekly: structure.weekly > 0 };
 }
-function rivalEventNameForWeek(co, weekNumber) {
-  const templates = rivalEventTemplates(co);
-  return templates[weekNumber % templates.length];
+// Decides whether this company even attempts a show this week, and under
+// which name — the one place both the sim and the display agree on cadence.
+function rivalShowDueThisWeek(co, weekNumber, isPPVWeek) {
+  const { weekly, ppv, runsWeekly } = rivalEventTemplates(co);
+  if (isPPVWeek && ppv) return { eventName: ppv, guaranteed: true };
+  if (runsWeekly) return { eventName: weekly[weekNumber % weekly.length], guaranteed: false };
+  // Unknown tier: no weekly show at all — just their one small show, on the
+  // same once-a-month cadence as everyone else's PPV week.
+  if (isPPVWeek) return { eventName: weekly[0], guaranteed: false };
+  return null;
 }
 // Region popularity bars — derived, not separately simulated: no per-region
 // history is tracked, so this is worked out fresh each render from the one
@@ -1906,7 +1926,7 @@ const GUIDE_SECTIONS = [
   {
     key: "promotions", title: "Promotions (Rivals)", icon: Globe2,
     body: [
-      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Each one runs its own named recurring shows, same idea as your Calendar event templates — how many scales with their current tier (Unknown/Local gets 1, Regional 2, National 3, Global 4), so growing into a bigger tier genuinely adds another show to their lineup. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, a popularity-by-region breakdown (worked out from their one overall popularity number and a fixed home region, not separately simulated), a funds/popularity trend chart once a few weeks of data exist, and their own Training Facility — every rival occasionally brings in a prospect of their own and, if they've hired a Trainer, trains them up the same way your Developmental system works. No manual promote step for them, though — a graduate moves to their main roster automatically.",
+      "Eight fictional rival companies compete alongside you — they hire, fire, crown champions, run their own simulated shows with the same ability-driven match ratings you get, and their popularity rises and falls independently. Each one runs its own named recurring shows, same idea as your Calendar event templates, scaled to their current tier: a brand new (Unknown) company doesn't run weekly at all yet, just one small show roughly once a month; Local runs one weekly show; Regional runs two; National and Global run two or three weekly shows plus a separately-branded monthly special, a bigger, guaranteed show on the same cadence as the shared PPV week. Growing (or shrinking) a tier genuinely changes their lineup, live. Tap any of them for a closer look at their roster (broken down by card position), champion, tag teams, a popularity-by-region breakdown (worked out from their one overall popularity number and a fixed home region, not separately simulated), a funds/popularity trend chart once a few weeks of data exist, and their own Training Facility — every rival occasionally brings in a prospect of their own and, if they've hired a Trainer, trains them up the same way your Developmental system works. No manual promote step for them, though — a graduate moves to their main roster automatically.",
       "Freelancers aren't exclusive to anyone — the same wrestler could realistically get booked by a rival the same week you're eyeing them, so they're not always guaranteed available.",
       "A Working Agreement (available once a rival's within one tier of you) opens up their signed roster as guest talent on your own shows — not free, but a discounted loan fee well below a normal per-use rate. Either side can end it at any time.",
       "Ratings (Menu > Ratings) ranks every show still on file — yours and every rival's — by estimated TV/PPV viewers. Nobody (rival or you, without a network deal) tracks real individual viewer counts, so it's worked out fresh from each company's popularity at the time and whichever network tier that would have actually qualified for.",
@@ -3980,13 +4000,17 @@ export default function BookedRingsideEmpire() {
           freelancePicks.forEach((w) => { takenFreelancers.add(w.name); rivalFreelanceBookings[w.name] = co.id; });
         }
         const combined = [...signedRoster, ...freelancePicks];
-        // Same PPV calendar the player sees (the header's PPV badge) — on that
-        // week every rival runs a bigger, guaranteed show too, not just a
-        // normal weekly house show.
-        const showChance = isPPVWeek ? 1 : RIVAL_SHOW_CHANCE;
-        if (combined.length >= 2 && Math.random() < showChance) {
+        // Whether — and under which name — this company even has a show due
+        // this week: a brand new (Unknown) company only runs its one small
+        // show on the shared monthly cadence, not every week; everyone with
+        // a weekly lineup rotates through it; National/Global additionally
+        // get a guaranteed, bigger, separately-branded show on that same
+        // monthly week instead of their normal weekly rotation.
+        const dueShow = rivalShowDueThisWeek(co, weekNumber, isPPVWeek);
+        const showChance = dueShow ? (dueShow.guaranteed ? 1 : RIVAL_SHOW_CHANCE) : 0;
+        if (dueShow && combined.length >= 2 && Math.random() < showChance) {
           const shuffled = [...combined].sort(() => Math.random() - 0.5);
-          const maxPairsForLength = Math.max(1, Math.round(rivalShowMinutes(co.popularity) / 30)) + (isPPVWeek ? 2 : 0);
+          const maxPairsForLength = Math.max(1, Math.round(rivalShowMinutes(co.popularity) / 30)) + (dueShow.guaranteed ? 2 : 0);
           const pairCount = Math.min(Math.floor(shuffled.length / 2), rand(1, maxPairsForLength));
           const showMatches = [];
           for (let i = 0; i < pairCount; i++) {
@@ -4003,12 +4027,12 @@ export default function BookedRingsideEmpire() {
             const rivalAvgAttr = (attrOf(a) + attrOf(b)) / 2;
             const rivalFloor = Math.round(rivalAvgAttr * 0.25);
             const rivalSpread = Math.round(20 + rivalAvgAttr * 0.55);
-            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread) + rivalStaffBonus(co.popularity, hiredStaffSkills) + (isPPVWeek ? 5 : 0)));
+            const rivalRating = Math.max(rivalFloor, Math.min(100, rivalFloor + Math.round(Math.random() * rivalSpread) + rivalStaffBonus(co.popularity, hiredStaffSkills) + (dueShow.guaranteed ? 5 : 0)));
             showMatches.push({ a: a.name, b: b.name, winner: aWins ? a.name : b.name, rating: rivalRating });
           }
           if (showMatches.length > 0) {
-            const rivalAttendance = Math.max(20, Math.round(co.popularity * 40 * (isPPVWeek ? 1.6 : 1) + rand(-500, 1500)));
-            newRivalShowRecords.push({ id: `${co.id}-${weekNumber}`, companyId: co.id, companyName: co.name, eventName: rivalEventNameForWeek(co, weekNumber), weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, matches: showMatches, attendance: rivalAttendance, wasPPV: isPPVWeek });
+            const rivalAttendance = Math.max(20, Math.round(co.popularity * 40 * (dueShow.guaranteed ? 1.6 : 1) + rand(-500, 1500)));
+            newRivalShowRecords.push({ id: `${co.id}-${weekNumber}`, companyId: co.id, companyName: co.name, eventName: dueShow.eventName, weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), date: scheduledDate, matches: showMatches, attendance: rivalAttendance, wasPPV: dueShow.guaranteed });
           }
         }
       });
@@ -5642,10 +5666,12 @@ export default function BookedRingsideEmpire() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5 bg-[#17151C] border border-[#2B2733] rounded-lg px-3 py-2 text-[11px]">
-            <Calendar size={14} className="text-[#8B6BC0]" />
-            <span className="font-bold">Y{currentYear} &middot; Wk {weekOfYear(weekNumber)}</span>
-            {isPPVWeek && <span className="text-[#8B6BC0] font-bold ml-1">PPV</span>}
+          <div className="flex items-center gap-2 bg-[#17151C] border border-[#2B2733] rounded-lg px-3 py-2">
+            <Calendar size={18} className="text-[#8B6BC0] shrink-0" />
+            <div className="leading-tight">
+              <div className="font-bold text-sm">Y{currentYear} &middot; Wk {weekOfYear(weekNumber)}{isPPVWeek && <span className="text-[#8B6BC0]"> &middot; PPV</span>}</div>
+              <div className="text-[10px] text-[#8B8593]">{formatDate(scheduledDate)}</div>
+            </div>
           </div>
           <button onClick={() => setShowPopularityModal(true)} className="flex items-center gap-1.5 bg-[#17151C] border border-[#2B2733] hover:border-[#5B3B8C] rounded-lg px-3 py-2 text-[11px] transition-colors">
             <BarChart3 size={14} className="text-[#8B6BC0]" />
@@ -7162,7 +7188,13 @@ export default function BookedRingsideEmpire() {
               </div>
 
               <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5 mt-3">SHOWS</div>
-              <div className="text-[10px] text-[#8B8593] mb-2">{rivalEventTemplates(co).join(", ")}</div>
+              <div className="text-[10px] text-[#8B8593] mb-2">
+                {(() => {
+                  const { weekly, ppv, runsWeekly } = rivalEventTemplates(co);
+                  if (!runsWeekly) return `${weekly[0]} — an occasional small show, roughly once a month.`;
+                  return `${weekly.join(", ")}${ppv ? ` · ${ppv} (monthly special)` : ""}`;
+                })()}
+              </div>
               <div className="text-[10px] tracking-widest text-[#8B8593] font-bold mb-1.5">RECENT SHOWS</div>
               <div className="space-y-2">
                 {rivalShowHistory.filter((r) => r.companyId === co.id).slice(0, 5).map((r) => (
