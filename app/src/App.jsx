@@ -288,6 +288,12 @@ function makeSegment(format) {
     format, type: "singles", angleType: "promo",
     team1: [null, null, null, null], team2: [null, null],
     titleId: null, specialtyId: null,
+    // Stakes stipulations — independent of the physical gimmick (specialtyId)
+    // above. n1cTitleId: the winner earns a guaranteed shot at this title
+    // (see number1Contenders). loserLeaves: the loser is released outright.
+    // Mutually exclusive with titleId (a match can't simultaneously defend a
+    // title and decide its own next challenger) — enforced in the UI.
+    n1cTitleId: null, loserLeaves: false,
     minutes: SEGMENT_DEFAULT_MINUTES,
     // null = let the booker's stats decide. Otherwise the name of a wrestler
     // on the winning side/the winning participant — works for 1v1, tag (any
@@ -1483,6 +1489,7 @@ const SPECIALTY_MATCHES = [
   { id: "submission", name: "Submission Match", minTier: "Local", cost: 350, ratingBonus: 6, statKey: "sub" },
   { id: "fca", name: "Falls Count Anywhere", minTier: "Regional", cost: 300, ratingBonus: 5, statKey: "spec" },
   { id: "ladder", name: "Ladder Match", minTier: "Regional", cost: 750, ratingBonus: 8, statKey: "jmp" },
+  { id: "tlc", name: "TLC Match", minTier: "National", cost: 1000, ratingBonus: 10, statKey: "jmp" },
   { id: "lastmanstanding", name: "Last Man Standing", minTier: "National", cost: 600, ratingBonus: 7, statKey: "eng" },
   { id: "ironman", name: "Iron Man Match", minTier: "National", cost: 900, ratingBonus: 9, statKey: "eng" },
   { id: "cage", name: "Cage Match", minTier: "Global", cost: 1500, ratingBonus: 12, statKey: "atk" },
@@ -1911,6 +1918,8 @@ const GUIDE_SECTIONS = [
     body: [
       "You start with one title and can buy up to 5 more (£25,000 each) as Singles or Tag Team, optionally locked to a weight class or gender.",
       "Once a title has a champion, only a top-3 ranked contender (from your own roster, exclusive or per-use) can challenge for it — vacant titles are open to anyone. Multi-man matches are exempt from the contender rule, since a scramble is a scramble.",
+      "A #1 Contender Match (set on any non-title match in the card builder, singles or multi-man) skips the ranked queue entirely — its winner is guaranteed a title shot regardless of where they'd otherwise rank, shown as (earned) on the Titles tab, until they actually get (and cash in) a real match for that title.",
+      "Loser Leaves — a toggle on any match in the card builder — releases the losing side from your roster outright the moment the show runs. No buyout, no negotiation: it's a storyline write-off, so think it through before booking it on anyone you don't actually want gone.",
       "A champion who goes 8 shows without defending gets automatically vacated, with a small prestige hit — the Titles tab warns you once you're within 3 weeks of that happening.",
       "Prestige builds from defenses and match quality, but a reign that ends with zero defenses takes a real hit — win it and immediately drop it, and it counts as a fluke, not a real reign.",
       "Rankings (its own tab) shows the top 10 by ranking points, singles or tag, filterable by promotion. Ranking points decay slowly if a wrestler sits out or is injured, and are capped so a long unbeaten streak can't snowball forever.",
@@ -2231,6 +2240,12 @@ export default function BookedRingsideEmpire() {
   const [editingTitleId, setEditingTitleId] = useState(null);
   const [editingTitleName, setEditingTitleName] = useState("");
   const TITLE_PURCHASE_COST = 25000;
+  // Winners of a Number One Contender match get a guaranteed title shot —
+  // this is what titleContenders() reads on top of the normal ranking.
+  // Keyed by titleId so each title tracks at most one earned contender at a
+  // time; cleared the moment that contender actually gets (and cashes in)
+  // a real title match for it, win or lose.
+  const [number1Contenders, setNumber1Contenders] = useState([]); // [{titleId, key, label, wonWeek}]
 
   const [showHistory, setShowHistory] = useState([]);
   const [rivalShowHistory, setRivalShowHistory] = useState([]);
@@ -2784,11 +2799,28 @@ export default function BookedRingsideEmpire() {
         .sort((a, b) => b.pts - a.pts)
         .slice(0, CONTENDER_SLOTS);
     }
-    return bookable
+    const ranked = bookable
       .filter((w) => !title.holders.includes(w.name) && meetsTitleRestrictions(w, title))
       .map((w) => ({ key: w.name, label: w.name, pts: w.rankingPts }))
       .sort((a, b) => b.pts - a.pts)
       .slice(0, CONTENDER_SLOTS);
+    // A Number One Contender match winner is guaranteed a shot regardless of
+    // where they'd otherwise rank — bump them in ahead of the ranked list
+    // (or just surface them, if they'd have made it anyway).
+    const earned = number1Contenders.find((n) => n.titleId === title.id);
+    if (earned && !title.holders.includes(earned.key) && !ranked.some((r) => r.key === earned.key)) {
+      return [{ key: earned.key, label: earned.label, pts: Infinity, earned: true }, ...ranked].slice(0, CONTENDER_SLOTS + 1);
+    }
+    return ranked.map((r) => (r.key === earned?.key ? { ...r, earned: true } : r));
+  };
+  // Resolves a #1 Contender stipulation's winner into the shape
+  // number1Contenders tracks — UI only offers non-tag titles as n1cTitleId
+  // choices, so winnerTeam is always a single wrestler here.
+  const n1cInfoFor = (seg, winnerTeam) => {
+    if (!seg.n1cTitleId || winnerTeam.length === 0) return null;
+    const title = titles.find((t) => t.id === seg.n1cTitleId);
+    if (!title) return null;
+    return { id: title.id, name: title.name, key: winnerTeam[0].name, label: winnerTeam[0].name };
   };
 
   const addWrestlerRivalry = (nameA, nameB) => {
@@ -3045,8 +3077,9 @@ export default function BookedRingsideEmpire() {
           titleInfo = { id: title.id, name: title.name, label: title.holders.length === 0 ? "New Champion(s)" : defended ? "Title Defended" : "Title Changes Hands!", defended };
         }
       }
+      const n1cInfo = n1cInfoFor(seg, winnerTeam);
       const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, participants) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM, customName: seg.customName || null, script: seg.script || null };
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM, customName: seg.customName || null, script: seg.script || null };
     }
     const team1 = seg.team1.filter(Boolean);
     const team2 = seg.team2.filter(Boolean);
@@ -3145,8 +3178,9 @@ export default function BookedRingsideEmpire() {
     // Event, not a flat bonus everywhere.
     const clutchBonus = (label === "Main Event" || !!seg.titleId) && [...team1, ...team2].some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
     rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetST ? 6 : 0));
+    const n1cInfo = n1cInfoFor(seg, winnerTeam);
     const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, [...team1, ...team2]) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST, customName: seg.customName || null, script: seg.script || null };
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST, customName: seg.customName || null, script: seg.script || null };
   };
 
   // Applies a field update to one segment, then re-resolves it (or clears
@@ -3167,7 +3201,7 @@ export default function BookedRingsideEmpire() {
   const addSegment = (format) => setSegments((prev) => [...prev, makeSegment(format)]);
   const removeSegment = (id) => setSegments((prev) => prev.filter((s) => s.id !== id));
   const setSegmentFormat = (id, format) => {
-    updateSegment(id, (s) => ({ ...s, format, angleType: "promo", team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null, winnerOverride: null, winMethodOverride: null }));
+    updateSegment(id, (s) => ({ ...s, format, angleType: "promo", team1: [s.team1[0], null, null, null], team2: [null, null], titleId: null, specialtyId: null, n1cTitleId: null, loserLeaves: false, winnerOverride: null, winMethodOverride: null }));
   };
   const setSegmentAngleType = (id, angleType) => {
     // Vignette has no subject — drop one if it was set switching away from
@@ -3195,8 +3229,10 @@ export default function BookedRingsideEmpire() {
       return { ...s, [side]: team, titleId: null, winnerOverride: null, winMethodOverride: null };
     });
   };
-  const setSegmentTitle = (id, titleId) => updateSegment(id, (s) => ({ ...s, titleId }));
+  const setSegmentTitle = (id, titleId) => updateSegment(id, (s) => ({ ...s, titleId, n1cTitleId: titleId ? null : s.n1cTitleId }));
   const setSegmentSpecialty = (id, specialtyId) => updateSegment(id, (s) => ({ ...s, specialtyId }));
+  const setSegmentN1C = (id, n1cTitleId) => updateSegment(id, (s) => ({ ...s, n1cTitleId, titleId: n1cTitleId ? null : s.titleId }));
+  const setSegmentLoserLeaves = (id, loserLeaves) => updateSegment(id, (s) => ({ ...s, loserLeaves }));
   const setSegmentMinutes = (id, minutes) => updateSegment(id, (s) => ({ ...s, minutes: clamp(minutes, SEGMENT_MIN_MINUTES, SEGMENT_MAX_MINUTES) }));
   const setSegmentWinner = (id, name) => updateSegment(id, (s) => ({ ...s, winnerOverride: name }));
   const setSegmentWinMethod = (id, method) => updateSegment(id, (s) => ({ ...s, winMethodOverride: method }));
@@ -3507,6 +3543,34 @@ export default function BookedRingsideEmpire() {
           history: title.holders.length > 0 ? [...title.history, { holderNames: title.holders, reignWeeks: weekNumber - title.reignStartWeek, wonWeek: title.reignStartWeek, lostWeek: weekNumber, defenses: title.currentReignDefenses || 0 }] : title.history,
         };
       });
+      // #1 Contender stipulation: grant the winner a guaranteed shot at the
+      // chosen title, and clear out anyone who just cashed theirs in (win or
+      // lose — getting the actual title match is what consumes it) so a
+      // stale entry doesn't keep surfacing after it's already been used.
+      const n1cGrants = {};
+      const n1cClears = new Set();
+      matches.forEach((m) => {
+        if (m.format !== "match") return;
+        if (m.n1cInfo) n1cGrants[m.n1cInfo.id] = { titleId: m.n1cInfo.id, key: m.n1cInfo.key, label: m.n1cInfo.label, wonWeek: weekNumber };
+        if (m.titleInfo) [...m.team1, ...(m.team2 || [])].forEach((w) => n1cClears.add(`${m.titleInfo.id}|${w.name}`));
+      });
+      if (Object.keys(n1cGrants).length > 0 || n1cClears.size > 0) {
+        setNumber1Contenders((list) => {
+          let next = list.filter((c) => !n1cClears.has(`${c.titleId}|${c.key}`));
+          Object.values(n1cGrants).forEach((g) => { next = [...next.filter((c) => c.titleId !== g.titleId), g]; });
+          return next;
+        });
+        Object.values(n1cGrants).forEach((g) => titleNewsEntries.push(`${g.label} has earned a guaranteed shot at the ${g.name} by winning a Number One Contender match!`));
+      }
+      // Loser Leaves [Town/Promotion]: the losing side is released outright —
+      // a storyline write-off, not a negotiated buyout, so no fee applies.
+      const loserLeavesNames = new Set();
+      matches.forEach((m) => { if (m.format === "match" && m.loserLeaves) (m.loserTeam || []).forEach((w) => loserLeavesNames.add(w.name)); });
+      if (loserLeavesNames.size > 0) {
+        setPool((p) => p.map((w) => (loserLeavesNames.has(w.name) ? { ...w, contractedTo: null, contractExpiresWeek: null, hireCooldownUntil: null } : w)));
+        loserLeavesNames.forEach((n) => titleNewsEntries.push(`${n} has been released from the promotion after losing a Loser Leaves stipulation match.`));
+      }
+
       const vacatedByInactivity = [];
       setTitles((ts) => {
         const nextTitles = ts.map((t) => {
@@ -4712,6 +4776,7 @@ export default function BookedRingsideEmpire() {
     financeHistory: financeHistory.slice(-300),
     rivalFinanceHistory: rivalFinanceHistory.slice(-1600),
     rivalShowHistory: rivalShowHistory.slice(0, 150),
+    number1Contenders,
     universeFeed: universeFeed.slice(0, 150),
     storylines, stableStorylines, stables,
     networkDeal, networkOffers, sponsorDeal, sponsorOffers,
@@ -4752,6 +4817,7 @@ export default function BookedRingsideEmpire() {
     // Dates survive JSON as strings, not Date objects — rebuild them so formatDate() still works.
     setShowHistory((s.showHistory || []).map((r) => ({ ...r, date: new Date(r.date) })));
     setRivalShowHistory((s.rivalShowHistory || []).map((r) => ({ ...r, date: new Date(r.date) })));
+    setNumber1Contenders(s.number1Contenders || []);
     setFinanceHistory(s.financeHistory || [{ weekNumber: 0, year: 1, weekOfYear: 0, bank: s.bank ?? 20000 }]);
     setRivalFinanceHistory(s.rivalFinanceHistory || []);
     setUniverseFeed((s.universeFeed || []).map((item) => ({ ...item, date: new Date(item.date) })));
@@ -4980,6 +5046,7 @@ export default function BookedRingsideEmpire() {
     setNextStaggeredDebutIndex(0);
     setPerUseRoster([]);
     setTitles([{ id: "world", name: co.titleName, type: "singles", holders: champion ? [champion] : [], reignStartWeek: champion ? 1 : null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] }]);
+    setNumber1Contenders([]);
     setShowHistory([]);
     setRivalShowHistory([]);
     setRivalFinanceHistory([]);
@@ -5092,6 +5159,7 @@ export default function BookedRingsideEmpire() {
     setNextStaggeredDebutIndex(0);
     setPerUseRoster([]);
     setTitles([{ id: "world", name: "World Championship", type: "singles", holders: [], reignStartWeek: null, totalDefenses: 0, currentReignDefenses: 0, prestige: 0, history: [] }]);
+    setNumber1Contenders([]);
     setShowHistory([]);
     setRivalShowHistory([]);
     setRivalFinanceHistory([]);
@@ -7517,6 +7585,11 @@ export default function BookedRingsideEmpire() {
                     return challengerNames.every((n) => contenders.some((c) => c.key === n));
                   });
                   const eligibleSpecialties = SPECIALTY_MATCHES.filter((s) => specialtyUnlocked(s, popularity));
+                  // #1 Contender eligibility is deliberately simpler than eligibleTitles
+                  // above: no ranking/holder checks, since the whole point of this
+                  // stipulation is to let someone skip the ranked-contender queue.
+                  // Tag titles are excluded — see n1cInfoFor's note on why.
+                  const n1cEligibleTitles = slot.format === "match" ? titles.filter((t) => t.type !== "tag") : [];
                   const partnerOptions = (side) => {
                     const primary = slot[side][0];
                     if (!primary) return bookable;
@@ -7656,6 +7729,22 @@ export default function BookedRingsideEmpire() {
                               ))}
                             </select>
                           </div>
+                          {n1cEligibleTitles.length > 0 && !slot.titleId && (
+                            <div className="flex items-center gap-2">
+                              <Medal size={12} className="text-[#8B6BC0] shrink-0" />
+                              <select value={slot.n1cTitleId || ""} onChange={(e) => setSegmentN1C(slot.id, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
+                                <option value="">Not a #1 Contender match</option>
+                                {n1cEligibleTitles.map((title) => (
+                                  <option key={title.id} value={title.id}>Winner becomes #1 contender for the {title.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {slot.n1cTitleId && <div className="text-[9px] text-[#8B8593] italic">The winner skips the ranked queue and earns a guaranteed title shot — cleared the moment they actually cash it in.</div>}
+                          <button onClick={() => setSegmentLoserLeaves(slot.id, !slot.loserLeaves)} className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border self-start ${slot.loserLeaves ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>
+                            <Skull size={12} /> Loser Leaves
+                          </button>
+                          {slot.loserLeaves && <div className="text-[9px] text-[#8B8593] italic">Whoever loses is released from the promotion outright — no buyout, no negotiation.</div>}
                         </>
                       ) : (
                         <>
@@ -7796,6 +7885,22 @@ export default function BookedRingsideEmpire() {
                               ))}
                             </select>
                           </div>
+                          {n1cEligibleTitles.length > 0 && !slot.titleId && (
+                            <div className="flex items-center gap-2">
+                              <Medal size={12} className="text-[#8B6BC0] shrink-0" />
+                              <select value={slot.n1cTitleId || ""} onChange={(e) => setSegmentN1C(slot.id, e.target.value || null)} className="flex-1 bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[11px] text-[#8B6BC0]">
+                                <option value="">Not a #1 Contender match</option>
+                                {n1cEligibleTitles.map((title) => (
+                                  <option key={title.id} value={title.id}>Winner becomes #1 contender for the {title.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {slot.n1cTitleId && <div className="text-[9px] text-[#8B8593] italic">The winner skips the ranked queue and earns a guaranteed title shot — cleared the moment they actually cash it in.</div>}
+                          <button onClick={() => setSegmentLoserLeaves(slot.id, !slot.loserLeaves)} className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border self-start ${slot.loserLeaves ? "bg-[#5B3B8C] border-[#5B3B8C]" : "border-[#2B2733] text-[#8B8593]"}`}>
+                            <Skull size={12} /> Loser Leaves
+                          </button>
+                          {slot.loserLeaves && <div className="text-[9px] text-[#8B8593] italic">Whoever loses is released from the promotion outright — no buyout, no negotiation.</div>}
                         </>
                       )}
 
@@ -7835,6 +7940,8 @@ export default function BookedRingsideEmpire() {
                             </div>
                           )}
                           {slot.result.titleInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={11} /> {slot.result.titleInfo.name} &mdash; {slot.result.titleInfo.label}</div>}
+                          {slot.result.n1cInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={11} /> {slot.result.n1cInfo.label} is #1 contender for the {slot.result.n1cInfo.name}!</div>}
+                          {slot.result.loserLeaves && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-red-400"><Skull size={11} /> Loser Leaves — {slot.result.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
                           {slot.result.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{slot.result.script}</div>}
                         </div>
                       )}
@@ -7994,6 +8101,8 @@ export default function BookedRingsideEmpire() {
                     </div>
                   )}
                   {m.titleInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={11} /> {m.titleInfo.name} &mdash; {m.titleInfo.label}</div>}
+                  {m.n1cInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={11} /> {m.n1cInfo.label} is #1 contender for the {m.n1cInfo.name}!</div>}
+                  {m.loserLeaves && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-red-400"><Skull size={11} /> Loser Leaves — {m.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
                   {m.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                 </div>
               ))}
@@ -8112,6 +8221,8 @@ export default function BookedRingsideEmpire() {
                               </div>
                             )}
                             {m.titleInfo && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={10} /> {m.titleInfo.name} &mdash; {m.titleInfo.label}</div>}
+                            {m.n1cInfo && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={10} /> {m.n1cInfo.label} is #1 contender for the {m.n1cInfo.name}!</div>}
+                            {m.loserLeaves && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-red-400"><Skull size={10} /> Loser Leaves — {m.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
                             {m.script && <div className="mt-0.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                           </div>
                         ))}
@@ -8477,8 +8588,8 @@ export default function BookedRingsideEmpire() {
                       <div className="space-y-1">
                         {titleContenders(t).map((c, i) => (
                           <div key={c.key} className="text-[10px] flex justify-between">
-                            <span className="text-[#CFC9BB]">#{i + 1} {c.label}</span>
-                            <span className="text-[#8B8593]">{c.pts} pts</span>
+                            <span className="text-[#CFC9BB]">#{i + 1} {c.label}{c.earned && <span className="text-[#8B6BC0]"> (earned)</span>}</span>
+                            <span className="text-[#8B8593]">{Number.isFinite(c.pts) ? `${c.pts} pts` : "guaranteed"}</span>
                           </div>
                         ))}
                       </div>
