@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import {
-  Zap, Wind, HeartPulse, Mic2, Shield, TrendingUp, RotateCcw,
+  Zap, Wind, HeartPulse, Mic2, Shield, TrendingUp, RotateCcw, Megaphone,
   Wallet, Users, Ticket, Building2, Star, X, Plus, Trophy, UserPlus, Award, BarChart3, Newspaper,
   Calendar, ChevronDown, ListChecks, Landmark, Pencil, Globe2, Check, Sparkles, BatteryCharging,
   ArrowUpCircle, Swords, Layers, LineChart as LineChartIcon, NotebookPen, Lock, Tv, Flame, Skull, Users2, BookOpen, Menu, Flag,
@@ -318,16 +318,17 @@ function makeSegment(format) {
 // tab history) so the flavor text can only drift out of sync with the
 // mechanics in one place, not three.
 function angleResultText(m) {
+  const managerTag = m.manager ? ` (accompanied by ${m.manager.name})` : "";
   if (m.angleType === "confrontation") {
-    return `${m.performer.name} and ${m.subject.name} go face to face${m.brawl ? " — and it turns physical!" : "."}`;
+    return `${m.performer.name}${managerTag} and ${m.subject.name} go face to face${m.brawl ? " — and it turns physical!" : "."}`;
   }
   if (m.angleType === "vignette") {
-    if (m.hypeInfo?.kind === "signee") return m.performer.name === m.hypeInfo.name ? `${m.performer.name} cuts a hype package for their own arrival.` : `${m.performer.name} cuts a hype package for ${m.hypeInfo.name}'s arrival.`;
-    if (m.hypeInfo?.kind === "return") return m.performer.name === m.hypeInfo.name ? `${m.performer.name} cuts a hype package for their own return from injury.` : `${m.performer.name} cuts a hype package for ${m.hypeInfo.name}'s return from injury.`;
-    if (m.hypeInfo?.kind === "show") return `${m.performer.name} cuts a hype package for the upcoming show.`;
-    return `${m.performer.name} delivers a vignette.`;
+    if (m.hypeInfo?.kind === "signee") return m.performer.name === m.hypeInfo.name ? `${m.performer.name}${managerTag} cuts a hype package for their own arrival.` : `${m.performer.name}${managerTag} cuts a hype package for ${m.hypeInfo.name}'s arrival.`;
+    if (m.hypeInfo?.kind === "return") return m.performer.name === m.hypeInfo.name ? `${m.performer.name}${managerTag} cuts a hype package for their own return from injury.` : `${m.performer.name}${managerTag} cuts a hype package for ${m.hypeInfo.name}'s return from injury.`;
+    if (m.hypeInfo?.kind === "show") return `${m.performer.name}${managerTag} cuts a hype package for the upcoming show.`;
+    return `${m.performer.name}${managerTag} delivers a vignette.`;
   }
-  return `${m.performer.name} cuts a promo${m.subject ? ` aimed at ${m.subject.name}` : ""}.`;
+  return `${m.performer.name}${managerTag} cuts a promo${m.subject ? ` aimed at ${m.subject.name}` : ""}.`;
 }
 
 // News items are built at the moment they happen from a single flat fact
@@ -368,6 +369,13 @@ const NEWS_FLAVOR = {
     "It's the kind of story that tends to take on a life of its own.",
     "Insiders say there's more to come on this one.",
     "For now, it's just talk — but talk has a way of becoming true in this business.",
+  ],
+  authority: [
+    "The locker room's reaction was mixed, as it usually is when the boss weighs in.",
+    "Whether it's the right call or just a power play, nobody in the back is saying it to their face.",
+    "It's the kind of decree that'll shape the next few weeks of storylines.",
+    "Fans online are already arguing over what it means going forward.",
+    "For better or worse, that's the business — the person signing the checks gets the last word.",
   ],
 };
 function hashStr(s) {
@@ -537,6 +545,8 @@ const STAFF_ROLES = [
   { key: "security", label: "Security", desc: "Keeps the crowd and backstage area under control — a strong team cuts down on the costly incidents and lawsuits that come from a security lapse." },
   { key: "booker", label: "Assistant Booker", desc: "A second set of eyes across the whole card — a strong assistant nudges every show's overall rating up a little." },
   { key: "trainer", label: "Trainer", desc: "Coaches your Developmental prospects directly — the better the trainer, the faster they close the gap to their potential." },
+  { key: "manager", label: "Manager", desc: "An on-screen mouthpiece, not a backstage role — assign one to a specific wrestler from their card below. Accompanies that wrestler into angles and matches for a rating bump scaled to the manager's own skill, and gets name-checked in the result." },
+  { key: "authority", label: "Authority Figure", desc: "An on-screen GM/boss character who doesn't manage anyone or touch a match directly — makes the news from time to time, and a sharp one keeps the whole locker room's morale up a little; a weak one lets it slip." },
 ];
 // A retiring wrestler's in-ring résumé is exactly the pedigree a locker room
 // wants from one of these three roles — referee/medical/ring crew are
@@ -571,7 +581,9 @@ function generateStaffCandidate(role, usedNames = new Set()) {
   while (usedNames.has(name) && guard < 30) { name = randomBookerName(); guard++; }
   if (usedNames.has(name)) name = `${name} ${toRomanNumeral(guard + 1)}`;
   const skill = rand(20, 85);
-  return { id: `staff-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name, role, skill, contractedTo: null, contractExpiresWeek: null };
+  // assignedTo only means anything for a Manager (see assignManager) — every
+  // other role just carries it around unused.
+  return { id: `staff-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name, role, skill, contractedTo: null, contractExpiresWeek: null, assignedTo: null };
 }
 function buildStaffPool() {
   const usedNames = new Set();
@@ -1899,7 +1911,7 @@ const GUIDE_SECTIONS = [
   {
     key: "staff", title: "Staff", icon: HardHat,
     body: [
-      "Staff (Menu) covers seven behind-the-scenes roles, each hired straight from a standing candidate pool — no bidding against yourself, just pick a candidate and offer a contract. Agent, Referee, and Assistant Booker all raise the ceiling your matches can realistically hit; Medical Staff cuts injury odds and shortens recovery; Ring Crew reduces the odds of a general company catastrophe (lawsuits, tax audits, scandals); Security does the same for crowd and venue incidents specifically (fights, barrier jumps, backstage breaches); Trainer speeds up how fast Developmental prospects close the gap to their potential. Only your single best hire per role counts — a second Agent doesn't stack with the first.",
+      "Staff (Menu) covers nine roles, each hired straight from a standing candidate pool — no bidding against yourself, just pick a candidate and offer a contract. Agent, Referee, and Assistant Booker all raise the ceiling your matches can realistically hit; Medical Staff cuts injury odds and shortens recovery; Ring Crew reduces the odds of a general company catastrophe (lawsuits, tax audits, scandals); Security does the same for crowd and venue incidents specifically (fights, barrier jumps, backstage breaches); Trainer speeds up how fast Developmental prospects close the gap to their potential. Only your single best hire per role counts — a second Agent doesn't stack with the first. The last two are on-screen, not backstage, and don't share that cap: a Manager is assigned to one specific wrestler from their card (accompanies them into angles and matches for a rating bump) and an Authority Figure is an on-screen GM who makes the news now and then and nudges the whole roster's morale, up or down, based on their skill.",
       "Rivals aren't just sitting there — every non-acquired rival company competes for the exact same candidate pool, hiring and occasionally losing staff of their own over time. Anyone a rival's already snapped up shows up greyed out in your Candidates list rather than just vanishing, so you can see the competition for talent happening.",
       "Once you've founded a Developmental feeder promotion (Back Office), its Promotions screen entry becomes a full Training Facility profile: your hired Trainer(s) by name, every current trainee's progress bar toward their potential, and an Alumni list of everyone who's actually graduated to your main roster.",
     ],
@@ -2475,6 +2487,7 @@ export default function BookedRingsideEmpire() {
     if (cost > 0) setFinanceHistory((fh) => [...fh, { weekNumber, year: currentYear, weekOfYear: weekOfYear(weekNumber), bank: bank - cost }]);
     setPool((p) => p.map((x) => (x.name === w.name ? { ...x, contractedTo: null, contractExpiresWeek: null } : x)));
     setPendingOffers((po) => po.filter((e) => e.wrestlerName !== w.name));
+    setStaffPool((sp) => sp.map((s) => (s.assignedTo === w.name ? { ...s, assignedTo: null } : s)));
   };
 
   // Scouting — poach a young or undersized prospect straight off a rival's
@@ -2975,6 +2988,11 @@ export default function BookedRingsideEmpire() {
   const bestSecuritySkill = bestStaffSkill("security");
   const bestBookerSkill = bestStaffSkill("booker");
   const bestTrainerSkill = bestStaffSkill("trainer");
+  // A Manager is assigned to one wrestler (see assignManager) rather than
+  // contributing a blanket bonus like the other roles — this looks up
+  // whichever hired manager (if any) is currently assigned to a given name.
+  const managerFor = (name) => hiredStaff.find((s) => s.role === "manager" && s.assignedTo === name) || null;
+  const hiredAuthority = hiredStaff.find((s) => s.role === "authority") || null;
   // Agents and a sharp referee raise the ceiling a match can realistically hit;
   // an assistant booker's contribution is smaller and show-wide rather than
   // per-match. Caps at +12 total with max skill across all three roles.
@@ -2996,9 +3014,10 @@ export default function BookedRingsideEmpire() {
     setHiringStaffTarget(null);
   };
   const releaseStaff = (s) => {
-    setStaffPool((sp) => sp.map((x) => (x.id === s.id ? { ...x, contractedTo: null, contractExpiresWeek: null } : x)));
+    setStaffPool((sp) => sp.map((x) => (x.id === s.id ? { ...x, contractedTo: null, contractExpiresWeek: null, assignedTo: null } : x)));
     setUniverseFeed((feed) => [{ id: `staffrel-${weekNumber}-${Date.now()}`, showNumber: weekNumber, date: scheduledDate, text: `${companyName} has released ${s.name}.`, type: "rival", companyId: "player" }, ...feed].slice(0, 300));
   };
+  const assignManager = (staffId, wrestlerName) => setStaffPool((sp) => sp.map((s) => (s.id === staffId ? { ...s, assignedTo: wrestlerName || null } : s)));
 
   // Ported straight from the old fixed-slot resolution logic (same formulas,
   // same order of operations) — the only thing that changed is where `cap`
@@ -3063,8 +3082,14 @@ export default function BookedRingsideEmpire() {
       // A Vignette pointed at something real (see hypeTargets) plays better
       // than generic atmosphere — fans respond to actual news, not filler.
       const hypeInfo = angleType === "vignette" && seg.hypeTargetId ? hypeTargets().find((t) => t.id === seg.hypeTargetId) || null : null;
-      const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus + trendBonus) + (brawl ? 6 : 0) + (hypeInfo ? HYPE_TARGET_BONUS : 0));
-      return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, hypeInfo, titleInfo: null, customName: seg.customName || null, script: seg.script || null };
+      // A Manager's whole job is being an on-screen mouthpiece — this is
+      // where their skill actually shows up, same spirit as Agent/Referee's
+      // staffRatingBonus but tied to one specific wrestler instead of the
+      // whole show.
+      const manager = managerFor(performer.name);
+      const managerBonus = manager ? Math.round((manager.skill / 100) * 6) : 0;
+      const rating = Math.min(100, Math.min(cap, rawRating + showQualityBonus + trendBonus) + (brawl ? 6 : 0) + (hypeInfo ? HYPE_TARGET_BONUS : 0) + managerBonus);
+      return { slotKey: seg.id, slotLabel: label, format: "segment", angleType, performer, subject, rating, brawl, hypeInfo, manager, titleInfo: null, customName: seg.customName || null, script: seg.script || null };
     }
     // Purpose only applies to actual matches — why it's happening (a fair
     // fight, chasing the night's best rating, elevating the winner, or a
@@ -3114,7 +3139,12 @@ export default function BookedRingsideEmpire() {
       // the moments that reputation is named for — title matches and the
       // Main Event, not a flat bonus everywhere.
       const clutchBonus = (label === "Main Event" || !!seg.titleId) && participants.some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
-      rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetMM ? 6 : 0));
+      // Any participant with an assigned Manager (see assignManager) brings
+      // them to ringside too — summed across everyone involved, capped so a
+      // multi-man scramble full of managed wrestlers doesn't snowball.
+      const matchManagers = [...new Set(participants.map((w) => managerFor(w.name)).filter(Boolean))];
+      const managerBonus = Math.min(10, matchManagers.reduce((sum, m) => sum + Math.round((m.skill / 100) * 6), 0));
+      rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetMM ? 6 : 0) + managerBonus);
       let titleInfo = null;
       if (seg.titleId) {
         const title = titles.find((t) => t.id === seg.titleId);
@@ -3126,7 +3156,7 @@ export default function BookedRingsideEmpire() {
       }
       const n1cInfo = n1cInfoFor(seg, winnerTeam);
       const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, participants) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM, customName: seg.customName || null, script: seg.script || null };
+      return { slotKey: seg.id, slotLabel: label, format: "match", team1: participants, team2: [], winnerTeam, loserTeam, rating, isTag: false, isMultiMan: true, titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, matchManagers, storyKey: null, stableStoryKey: null, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetMM, customName: seg.customName || null, script: seg.script || null };
     }
     const team1 = seg.team1.filter(Boolean);
     const team2 = seg.team2.filter(Boolean);
@@ -3224,10 +3254,12 @@ export default function BookedRingsideEmpire() {
     // the moments that reputation is named for — title matches and the Main
     // Event, not a flat bonus everywhere.
     const clutchBonus = (label === "Main Event" || !!seg.titleId) && [...team1, ...team2].some((w) => deriveTraits(w).some((t) => t.key === "clutch")) ? 3 : 0;
-    rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetST ? 6 : 0));
+    const matchManagers = [...new Set([...team1, ...team2].map((w) => managerFor(w.name)).filter(Boolean))];
+    const managerBonus = Math.min(10, matchManagers.reduce((sum, m) => sum + Math.round((m.skill / 100) * 6), 0));
+    rating = Math.min(cap, rating + showQualityBonus + trendBonus + clutchBonus + (isUpsetST ? 6 : 0) + managerBonus);
     const n1cInfo = n1cInfoFor(seg, winnerTeam);
     const winMethod = seg.winMethodOverride || (sameParticipants(previousResult, [...team1, ...team2]) ? previousResult.winMethod : null) || pickWinMethod(winnerTeam);
-    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST, customName: seg.customName || null, script: seg.script || null };
+    return { slotKey: seg.id, slotLabel: label, format: "match", team1, team2, winnerTeam, loserTeam, rating, isTag: seg.type === "tag", titleInfo, n1cInfo, loserLeaves: !!seg.loserLeaves, specialty, matchManagers, storyKey, stableStoryKey, winMethod, purpose: purpose.id, matchStory: matchStory.id, upsetHappened: isUpsetST, customName: seg.customName || null, script: seg.script || null };
   };
 
   // Applies a field update to one segment, then re-resolves it (or clears
@@ -3617,6 +3649,7 @@ export default function BookedRingsideEmpire() {
       matches.forEach((m) => { if (m.format === "match" && m.loserLeaves) (m.loserTeam || []).forEach((w) => loserLeavesNames.add(w.name)); });
       if (loserLeavesNames.size > 0) {
         setPool((p) => p.map((w) => (loserLeavesNames.has(w.name) ? { ...w, contractedTo: null, contractExpiresWeek: null, hireCooldownUntil: null } : w)));
+        setStaffPool((sp) => sp.map((s) => (loserLeavesNames.has(s.assignedTo) ? { ...s, assignedTo: null } : s)));
         loserLeavesNames.forEach((n) => titleNewsEntries.push(`${n} has been released from the promotion after losing a Loser Leaves stipulation match.`));
       }
 
@@ -4189,6 +4222,24 @@ export default function BookedRingsideEmpire() {
         const next = candidates[rand(0, candidates.length - 1)];
         setFanTrendKey(next.key);
         setUniverseFeed((feed) => [{ id: `trend-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: `The wrestling world is ${next.news} right now.`, type: "rumor" }, ...feed].slice(0, 300));
+      }
+      // Authority Figure: doesn't touch a match directly, but a sharp GM
+      // keeps the locker room's morale up a little every week (a weak one
+      // lets it slip) and occasionally makes the news on their own.
+      if (isLastShowOfWeek && hiredAuthority) {
+        const moraleDelta = Math.round(((hiredAuthority.skill - 50) / 50) * 2);
+        if (moraleDelta !== 0) {
+          setPool((p) => p.map((w) => (w.contractedTo === "player" ? { ...w, happiness: clamp(w.happiness + moraleDelta, 0, 100) } : w)));
+        }
+        if (Math.random() < 0.35) {
+          const decrees = [
+            `${hiredAuthority.name} has announced a locker room meeting ahead of this week's show.`,
+            `${hiredAuthority.name} made a surprise ruling on next week's card.`,
+            `${hiredAuthority.name} was seen having a heated exchange backstage over the direction of the show.`,
+            `${hiredAuthority.name} addressed the roster directly about where ${companyName} is headed.`,
+          ];
+          setUniverseFeed((feed) => [{ id: `gm-${weekNumber}`, showNumber: weekNumber, date: scheduledDate, text: decrees[rand(0, decrees.length - 1)], type: "authority" }, ...feed].slice(0, 300));
+        }
       }
       // A retiree's legacy child finally comes of age, 15-20 years on — debuts
       // as a free agent like any other newcomer, but their Potential is
@@ -5993,6 +6044,7 @@ export default function BookedRingsideEmpire() {
                               {item.type === "title" && <Award size={11} className="text-[#8B6BC0]" />}
                               {item.type === "rival" && <Globe2 size={11} className="text-[#8B8593]" />}
                               {item.type === "injury" && <Skull size={11} className="text-red-400" />}
+                              {item.type === "authority" && <Megaphone size={11} className="text-[#8B6BC0]" />}
                               <span>Y{yearOf(item.showNumber)} Wk{weekOfYear(item.showNumber)} &middot; {formatDate(item.date)}</span>
                             </div>
                             <div className={`text-xs ${item.type === "title" ? "text-[#F2ECDD] font-semibold" : item.type === "injury" ? "text-red-300 font-semibold" : "text-[#CFC9BB]"}`}>{flavorizeNews(item)}</div>
@@ -6960,6 +7012,12 @@ export default function BookedRingsideEmpire() {
                         <button onClick={() => releaseStaff(s)} className="text-[9px] font-bold px-2 py-1 rounded border border-[#2B2733] text-[#8B8593] hover:text-red-400 hover:border-red-400">Release</button>
                       </div>
                       <div className="text-[10px] text-[#8B8593] mt-1">Skill {s.skill} &middot; £{staffWeeklyWage(s.skill).toLocaleString()}/wk &middot; under contract {Math.max(0, (s.contractExpiresWeek ?? weekNumber) - weekNumber)}wk</div>
+                      {role.key === "manager" && (
+                        <select value={s.assignedTo || ""} onChange={(e) => assignManager(s.id, e.target.value || null)} className="w-full bg-[#0A0A0C] border border-[#2B2733] rounded px-2 py-1 text-[10px] mt-2 text-[#8B6BC0]">
+                          <option value="">Unassigned</option>
+                          {bookable.map((w) => <option key={w.name} value={w.name}>{w.name}</option>)}
+                        </select>
+                      )}
                     </div>
                   ))}
                   {hiredStaff.filter((s) => s.role === role.key).length === 0 && (
@@ -8007,6 +8065,7 @@ export default function BookedRingsideEmpire() {
                           {slot.result.titleInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={11} /> {slot.result.titleInfo.name} &mdash; {slot.result.titleInfo.label}</div>}
                           {slot.result.n1cInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={11} /> {slot.result.n1cInfo.label} is #1 contender for the {slot.result.n1cInfo.name}!</div>}
                           {slot.result.loserLeaves && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-red-400"><Skull size={11} /> Loser Leaves — {slot.result.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
+                          {slot.result.matchManagers?.length > 0 && <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#8B8593]"><Mic2 size={11} /> At ringside: {slot.result.matchManagers.map((m) => m.name).join(", ")}</div>}
                           {slot.result.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{slot.result.script}</div>}
                         </div>
                       )}
@@ -8168,6 +8227,7 @@ export default function BookedRingsideEmpire() {
                   {m.titleInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={11} /> {m.titleInfo.name} &mdash; {m.titleInfo.label}</div>}
                   {m.n1cInfo && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={11} /> {m.n1cInfo.label} is #1 contender for the {m.n1cInfo.name}!</div>}
                   {m.loserLeaves && <div className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-red-400"><Skull size={11} /> Loser Leaves — {m.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
+                  {m.matchManagers?.length > 0 && <div className="flex items-center gap-1 mt-1.5 text-[10px] text-[#8B8593]"><Mic2 size={11} /> At ringside: {m.matchManagers.map((mg) => mg.name).join(", ")}</div>}
                   {m.script && <div className="mt-1.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                 </div>
               ))}
@@ -8288,6 +8348,7 @@ export default function BookedRingsideEmpire() {
                             {m.titleInfo && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-[#8B6BC0]"><Award size={10} /> {m.titleInfo.name} &mdash; {m.titleInfo.label}</div>}
                             {m.n1cInfo && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-[#8B6BC0]"><Medal size={10} /> {m.n1cInfo.label} is #1 contender for the {m.n1cInfo.name}!</div>}
                             {m.loserLeaves && <div className="flex items-center gap-1 mt-0.5 text-[10px] font-bold text-red-400"><Skull size={10} /> Loser Leaves — {m.loserTeam.map((w) => w.name).join(" & ")} released.</div>}
+                            {m.matchManagers?.length > 0 && <div className="flex items-center gap-1 mt-0.5 text-[10px] text-[#8B8593]"><Mic2 size={10} /> At ringside: {m.matchManagers.map((mg) => mg.name).join(", ")}</div>}
                             {m.script && <div className="mt-0.5 text-[10px] text-[#CFC9BB] italic whitespace-pre-wrap">{m.script}</div>}
                           </div>
                         ))}
@@ -9140,6 +9201,7 @@ export default function BookedRingsideEmpire() {
                     {item.type === "title" && <Award size={11} className="text-[#8B6BC0]" />}
                     {item.type === "rival" && <Globe2 size={11} className="text-[#8B8593]" />}
                     {item.type === "injury" && <Skull size={11} className="text-red-400" />}
+                    {item.type === "authority" && <Megaphone size={11} className="text-[#8B6BC0]" />}
                     <span>Y{yearOf(item.showNumber)} Wk{weekOfYear(item.showNumber)} &middot; {formatDate(item.date)}</span>
                   </div>
                   <div className={item.type === "title" ? "text-[#F2ECDD] font-semibold" : item.type === "injury" ? "text-red-300 font-semibold" : "text-[#CFC9BB]"}>{flavorizeNews(item)}</div>
